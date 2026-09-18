@@ -1,0 +1,8 @@
+{
+  "name": "Clinic Live Queue & Token Management",
+  "description": "A responsive, modern web app for clinic token management and patient tracking.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
