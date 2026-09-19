@@ -12,6 +12,7 @@ import SettingsPage from './pages/SettingsPage';
 import WaitingRoom from './pages/WaitingRoom';
 import PatientTracker from './pages/PatientTracker';
 import PatientShipmentForm from './pages/PatientShipmentForm';
+import SetupPage from './pages/SetupPage';
 
 export default function App() {
   return (
@@ -20,6 +21,8 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Navigate to="/login" replace />} />
           <Route path="/login" element={<Login />} />
+          <Route path="/setup" element={<SetupPage />} />
+          <Route path="/admin/setup" element={<SetupPage />} />
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/tv" element={<WaitingRoom />} />

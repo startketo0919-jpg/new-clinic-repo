@@ -1,4 +1,5 @@
 import { pool } from './index.js';
+import { hashPassword } from './auth-utils.js';
 
 export async function initDb() {
   console.log("Initializing MySQL database tables if not exist...");
@@ -148,14 +149,24 @@ export async function initDb() {
     console.error("Error creating default settings:", err);
   }
 
-  // Ensure default admin user exists
+  // Ensure default superadmin exists with hashed password and clean legacy users
   try {
+    const superAdminPassword = process.env.SUPERADMIN_PASSWORD || 'Suyash@924219762788';
+    const hashed = hashPassword(superAdminPassword);
+
+    // Remove legacy users (admin, etc.) to ensure fresh start
+    await pool.query(`DELETE FROM users WHERE username = 'admin' OR username != 'suyash';`);
+
+    // Ensure superadmin 'suyash' is present with hashed password
     await pool.query(`
-      INSERT IGNORE INTO users (id, username, password_hash, role, email) 
-      VALUES ('1', 'admin', 'Suyash@0919', 'admin', 'skgservicesin@gmail.com');
-    `);
+      INSERT INTO users (id, username, password_hash, role, email) 
+      VALUES ('1', 'suyash', ?, 'admin', 'skgservicesin@gmail.com')
+      ON DUPLICATE KEY UPDATE password_hash = VALUES(password_hash), role = 'admin', email = 'skgservicesin@gmail.com';
+    `, [hashed]);
+
+    console.log("Superadmin 'suyash' configured successfully with hashed password.");
   } catch (err) {
-    console.error("Error creating default admin user:", err);
+    console.error("Error creating default superadmin user:", err);
   }
 
   console.log("MySQL Database initialized successfully!");

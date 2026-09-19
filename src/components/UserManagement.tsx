@@ -13,7 +13,7 @@ export default function UserManagement() {
   
   const handleEditEmail = (user: User) => {
     const superPass = prompt("Enter Super Admin Password to edit email:");
-    if (superPass !== "Suyash@63965350780919") {
+    if (superPass !== "Suyash@924219762788") {
       if (superPass !== null) alert("Incorrect super admin password");
       return;
     }
@@ -25,17 +25,27 @@ export default function UserManagement() {
 
   const handleAddUser = (e: React.FormEvent) => {
     e.preventDefault();
-    if (username && password) {
-      if (state.users.some(u => u.username === username)) {
-        alert("Username already exists");
-        return;
-      }
-      addUser({ username, passwordHash: password, role, email });
-      setUsername('');
-      setPassword('');
-      setEmail('');
-      setRole('staff');
+    if (!username.trim() || !password) {
+      alert("Username and password are required");
+      return;
     }
+    if (!email.trim() || !email.includes('@')) {
+      alert("A valid email address is required for user login");
+      return;
+    }
+    if (state.users.some(u => u.email?.toLowerCase() === email.trim().toLowerCase())) {
+      alert("A user with this email already exists");
+      return;
+    }
+    if (state.users.some(u => u.username.toLowerCase() === username.trim().toLowerCase())) {
+      alert("A user with this username already exists");
+      return;
+    }
+    addUser({ username: username.trim(), passwordHash: password, role, email: email.trim().toLowerCase() });
+    setUsername('');
+    setPassword('');
+    setEmail('');
+    setRole('staff');
   };
 
   return (
@@ -78,11 +88,13 @@ export default function UserManagement() {
             </div>
             
             <div>
-              <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Email (For OTP Login)</label>
+              <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Email (Required for Login)</label>
               <input 
                 type="email"
+                required
                 value={email}
                 onChange={e => setEmail(e.target.value)}
+                placeholder="staff@clinic.com"
                 className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 text-sm"
               />
             </div>
@@ -100,7 +112,7 @@ export default function UserManagement() {
             </div>
             <button 
               type="submit"
-              className="mt-2 w-full bg-slate-800 hover:bg-slate-900 text-white font-medium py-2 rounded-lg transition-colors text-sm"
+              className="mt-2 w-full bg-slate-800 hover:bg-slate-900 text-white font-medium py-2 rounded-lg transition-colors text-sm cursor-pointer"
             >
               Create User
             </button>
@@ -149,10 +161,10 @@ export default function UserManagement() {
                     </td>
                     
                     <td className="py-3 px-4 text-right">
-                      {u.username !== 'admin' && (
+                      {u.username !== 'suyash' && u.role !== 'admin' && (
                         <button 
                           onClick={() => deleteUser(u.id)}
-                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors"
+                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors cursor-pointer"
                           title="Delete User"
                         >
                           <Trash2 className="w-4 h-4" />

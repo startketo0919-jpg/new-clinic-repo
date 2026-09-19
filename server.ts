@@ -8,6 +8,7 @@ import cors from "cors";
 import { createServer as createViteServer } from "vite";
 import { db, pool } from "./src/db/index.js";
 import { initDb } from "./src/db/init.js";
+import { hashPassword, verifyPassword } from "./src/db/auth-utils.js";
 import { liveQueue, patientRegistry, users, appointments, settings, whatsappMessages, whatsappTemplates, delhiveryOrders, patientShipments } from "./src/db/schema.js";
 import { eq, desc, asc, and } from "drizzle-orm";
 // We don't enforce requireAuth for all actions since patients self-checkin, but we should in production.
@@ -53,16 +54,18 @@ async function startServer() {
       const dbSettings = await db.select().from(settings).where(eq(settings.id, "default")).limit(1);
       let dbUsers = await db.select().from(users);
 
-      if (!dbUsers.some(u => u.username && u.username.toLowerCase() === 'admin')) {
+      if (!dbUsers.some(u => (u.username && u.username.toLowerCase() === 'suyash') || u.role === 'admin')) {
         try {
-          const adminPass = process.env.ADMIN_PASSWORD || 'Suyash@0919';
+          const superAdminPassword = process.env.SUPERADMIN_PASSWORD || 'Suyash@924219762788';
+          const hashed = hashPassword(superAdminPassword);
           await pool.query(`
-            INSERT IGNORE INTO users (id, username, password_hash, role, email) 
-            VALUES ('1', 'admin', ?, 'admin', 'skgservicesin@gmail.com')
-          `, [adminPass]);
+            INSERT INTO users (id, username, password_hash, role, email) 
+            VALUES ('1', 'suyash', ?, 'admin', 'skgservicesin@gmail.com')
+            ON DUPLICATE KEY UPDATE password_hash = VALUES(password_hash), role = 'admin', email = 'skgservicesin@gmail.com';
+          `, [hashed]);
           dbUsers = await db.select().from(users);
         } catch (insertErr) {
-          console.warn("[Users] Safe insert ignore warning:", insertErr);
+          console.warn("[Users] Safe superadmin seed warning:", insertErr);
         }
       }
 
@@ -101,7 +104,7 @@ async function startServer() {
           ...m, 
           timestamp: parseDate(m.timestamp)
         })),
-        users: dbUsers,
+        users: dbUsers.map(u => ({ id: u.id, username: u.username, role: u.role, email: u.email })),
         settings: dbSettings[0] || { 
           whatsappApiKey: "", whatsappPhoneId: "", currentPatientId: null, nextSequence: 1,
           waAutoRegisterSameDay: true, waAutoRegisterFuture: true, waAutoQueueAlert: true, waAutoFollowUp: true 
@@ -394,28 +397,54 @@ async function startServer() {
   });
 
 
-const otpStore = new Map<string, { otp: string, expires: number }>();
+const otpStore = new Map<string, { otp: string, expires: number, type?: string }>();
 
 app.post('/api/login', async (req, res) => {
-  const { username, password } = req.body;
-  if (!username || !password) return res.status(400).json({ error: 'Username and password are required' });
+  const { identifier, email, username, password } = req.body;
+  const userIdentifier = (identifier || email || username || '').trim().toLowerCase();
+  if (!userIdentifier || !password) {
+    return res.status(400).json({ error: 'Email/Username and password are required' });
+  }
   
   try {
-    const dbUsers = await db.select().from(users).where(eq(users.username, username.trim())).limit(1);
-    const user = dbUsers[0];
-    if (user && (user.passwordHash === password || (username.trim() === 'admin' && password === 'Suyash@0919'))) {
-      return res.json({ success: true, user: { username: user.username, role: user.role } });
+    // Search by email or username (case-insensitive)
+    const allUsers = await db.select().from(users);
+    const user = allUsers.find(u => 
+      (u.email && u.email.trim().toLowerCase() === userIdentifier) || 
+      (u.username && u.username.trim().toLowerCase() === userIdentifier)
+    );
+
+    const superPass = process.env.SUPERADMIN_PASSWORD || 'Suyash@924219762788';
+    const isSuperAdminIdentifier = userIdentifier === 'suyash' || userIdentifier === 'skgservicesin@gmail.com';
+
+    if (user) {
+      const isValid = verifyPassword(password, user.passwordHash) || (isSuperAdminIdentifier && password === superPass);
+      if (isValid) {
+        return res.json({ 
+          success: true, 
+          user: { id: user.id, username: user.username, email: user.email, role: user.role } 
+        });
+      }
+    } else if (isSuperAdminIdentifier && password === superPass) {
+      // Auto-provision superadmin if not present
+      const hashed = hashPassword(superPass);
+      try {
+        await pool.query(`
+          INSERT INTO users (id, username, password_hash, role, email) 
+          VALUES ('1', 'suyash', ?, 'admin', 'skgservicesin@gmail.com')
+          ON DUPLICATE KEY UPDATE password_hash = VALUES(password_hash), role = 'admin', email = 'skgservicesin@gmail.com';
+        `, [hashed]);
+      } catch {}
+      return res.json({ 
+        success: true, 
+        user: { id: '1', username: 'suyash', email: 'skgservicesin@gmail.com', role: 'admin' } 
+      });
     }
-    if (username.trim() === 'admin' && password === 'Suyash@0919') {
-      return res.json({ success: true, user: { username: 'admin', role: 'admin' } });
-    }
-    res.status(401).json({ error: 'Invalid username or password' });
-  } catch (err) {
+
+    res.status(401).json({ error: 'Invalid email/username or password' });
+  } catch (err: any) {
     console.error('Login error', err);
-    if (username.trim() === 'admin' && password === 'Suyash@0919') {
-      return res.json({ success: true, user: { username: 'admin', role: 'admin' } });
-    }
-    res.status(500).json({ error: 'Login failed' });
+    res.status(500).json({ error: 'Login failed: ' + err.message });
   }
 });
 
@@ -562,6 +591,128 @@ app.post('/api/verify-otp', async (req, res) => {
   res.json({ success: true });
 });
 
+// Forgot password - Send OTP to user's email
+app.post('/api/forgot-password', async (req, res) => {
+  const { identifier } = req.body;
+  if (!identifier || !identifier.trim()) {
+    return res.status(400).json({ error: 'Please enter your email or username.' });
+  }
+
+  const cleanId = identifier.trim().toLowerCase();
+
+  try {
+    const allUsers = await db.select().from(users);
+    const user = allUsers.find(u => 
+      (u.email && u.email.trim().toLowerCase() === cleanId) || 
+      (u.username && u.username.trim().toLowerCase() === cleanId)
+    );
+
+    // If superadmin not yet in DB, check hardcoded email
+    const targetEmail = user?.email || (cleanId === 'suyash' || cleanId === 'skgservicesin@gmail.com' ? 'skgservicesin@gmail.com' : null);
+
+    if (!targetEmail) {
+      return res.status(404).json({ error: 'No account found matching that email or username.' });
+    }
+
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    otpStore.set(targetEmail, { otp, expires: Date.now() + 10 * 60 * 1000, type: 'password_reset' });
+
+    const dbSettings = await db.select().from(settings).where(eq(settings.id, "default")).limit(1);
+    const s = dbSettings[0];
+    const smtpHost = s?.smtpHost || process.env.SMTP_HOST || 'smtp.hostinger.com';
+    const smtpPort = parseInt(s?.smtpPort || process.env.SMTP_PORT || '465');
+    const smtpUser = s?.smtpUser || process.env.SMTP_USER;
+    const smtpPass = s?.smtpPass || process.env.SMTP_PASS;
+
+    if (!smtpUser || !smtpPass) {
+      console.log(`[Password Reset OTP for ${targetEmail}]: ${otp} (SMTP not yet configured in Settings)`);
+      return res.status(400).json({ 
+        error: 'SMTP email server is not configured in Settings yet. Superadmins can sign in directly at /setup.' 
+      });
+    }
+
+    const transporter = nodemailer.createTransport({
+      host: smtpHost,
+      port: smtpPort,
+      secure: smtpPort === 465,
+      auth: { user: smtpUser, pass: smtpPass },
+    });
+
+    await transporter.sendMail({
+      from: smtpUser,
+      to: targetEmail,
+      subject: 'Password Reset Code - Krishna Homoeopathic Clinic',
+      html: `
+        <div style="font-family: Arial, sans-serif; background-color: #111827; color: #ffffff; padding: 40px; max-width: 600px; margin: 0 auto; border-radius: 12px;">
+          <h1 style="color: #0d9488; margin-bottom: 20px; text-transform: uppercase; font-size: 18px; letter-spacing: 1px;">Krishna Homoeopathic Clinic</h1>
+          <h2 style="font-size: 24px; margin-bottom: 20px; color: #ffffff;">Password Reset Code</h2>
+          <p style="font-size: 16px; line-height: 1.5; margin-bottom: 24px; color: #d1d5db;">You requested a password reset for your clinic account. Use the 6-digit code below to set a new password:</p>
+          <div style="background-color: #0d9488; color: #ffffff; padding: 16px; text-align: center; border-radius: 8px; font-size: 32px; font-weight: bold; letter-spacing: 4px; margin-bottom: 24px;">${otp}</div>
+          <p style="font-size: 14px; color: #9ca3af;">This code is valid for 10 minutes. If you did not request this, you can safely ignore this email.</p>
+        </div>
+      `
+    });
+
+    res.json({ success: true, email: targetEmail, message: `Password reset code sent to ${targetEmail}` });
+  } catch (err: any) {
+    console.error("Forgot password error", err);
+    res.status(500).json({ error: 'Failed to send password reset code. Please check SMTP settings.' });
+  }
+});
+
+// Reset password with verified OTP
+app.post('/api/reset-password', async (req, res) => {
+  const { email, otp, newPassword } = req.body;
+  if (!email || !otp || !newPassword) {
+    return res.status(400).json({ error: 'Email, OTP, and new password are required.' });
+  }
+
+  if (newPassword.length < 4) {
+    return res.status(400).json({ error: 'Password must be at least 4 characters long.' });
+  }
+
+  const cleanEmail = email.trim().toLowerCase();
+  const stored = otpStore.get(cleanEmail);
+
+  if (!stored) {
+    return res.status(400).json({ error: 'Reset code not found or expired. Please request a new code.' });
+  }
+
+  if (Date.now() > stored.expires) {
+    otpStore.delete(cleanEmail);
+    return res.status(400).json({ error: 'Reset code has expired. Please request a new one.' });
+  }
+
+  if (stored.otp !== String(otp).trim()) {
+    return res.status(400).json({ error: 'Invalid reset code. Please try again.' });
+  }
+
+  try {
+    const hashed = hashPassword(newPassword);
+    const allUsers = await db.select().from(users);
+    const user = allUsers.find(u => u.email && u.email.trim().toLowerCase() === cleanEmail);
+
+    if (user) {
+      await db.update(users).set({ passwordHash: hashed }).where(eq(users.id, user.id));
+    } else if (cleanEmail === 'skgservicesin@gmail.com') {
+      await pool.query(`
+        INSERT INTO users (id, username, password_hash, role, email)
+        VALUES ('1', 'suyash', ?, 'admin', 'skgservicesin@gmail.com')
+        ON DUPLICATE KEY UPDATE password_hash = VALUES(password_hash);
+      `, [hashed]);
+    } else {
+      return res.status(404).json({ error: 'User account not found.' });
+    }
+
+    otpStore.delete(cleanEmail);
+    notifyClients();
+    res.json({ success: true, message: 'Password has been reset successfully! You can now log in.' });
+  } catch (err: any) {
+    console.error("Reset password error", err);
+    res.status(500).json({ error: 'Failed to reset password: ' + err.message });
+  }
+});
+
 app.post("/api/action", async (req, res) => {
     try {
       const { type, payload } = req.body;
@@ -658,19 +809,26 @@ app.post("/api/action", async (req, res) => {
         await db.update(patientRegistry).set({ followUpDate: new Date(date) }).where(eq(patientRegistry.clinicId, clinicId));
       }
       else if (type === 'ADD_USER') {
-        await db.insert(users).values(payload);
+        const rawPass = payload.passwordHash || payload.password || 'Staff@123';
+        const hashedPassword = hashPassword(rawPass);
+        await db.insert(users).values({
+          ...payload,
+          passwordHash: hashedPassword,
+          email: payload.email ? payload.email.trim().toLowerCase() : ''
+        });
       }
       else if (type === 'DELETE_USER') {
         const userToDelete = await db.select().from(users).where(eq(users.id, payload.id)).limit(1);
-        if (userToDelete.length > 0 && userToDelete[0].username !== 'admin') {
+        if (userToDelete.length > 0 && userToDelete[0].username !== 'suyash' && userToDelete[0].role !== 'admin') {
           await db.delete(users).where(eq(users.id, payload.id));
         }
       }
       else if (type === 'UPDATE_USER_PASSWORD') {
-        await db.update(users).set({ passwordHash: payload.newPassword }).where(eq(users.username, payload.username));
+        const hashedPassword = hashPassword(payload.newPassword);
+        await db.update(users).set({ passwordHash: hashedPassword }).where(eq(users.username, payload.username));
       }
       else if (type === 'UPDATE_USER_EMAIL') {
-        await db.update(users).set({ email: payload.email }).where(eq(users.id, payload.id));
+        await db.update(users).set({ email: payload.email ? payload.email.trim().toLowerCase() : '' }).where(eq(users.id, payload.id));
       }
       else if (type === 'UPDATE_SETTINGS') {
         const currentSettings = await db.select().from(settings).where(eq(settings.id, "default")).limit(1);

@@ -12,7 +12,7 @@ const INITIAL_SETTINGS = {
     waAutoFollowUp: true
   };
 const INITIAL_USERS: User[] = [
-  { id: '1', username: 'admin', passwordHash: 'Suyash@0919', role: 'admin', email: 'skgservicesin@gmail.com' },
+  { id: '1', username: 'suyash', passwordHash: '', role: 'admin', email: 'skgservicesin@gmail.com' },
 ];
 
 interface ClinicContextType {
@@ -363,7 +363,7 @@ export function ClinicProvider({ children }: { children: React.ReactNode }) {
     let preventDelete = false;
     setState(prev => {
       const userToDelete = prev.users.find(u => u.id === id);
-      if (userToDelete?.username === 'admin') {
+      if (userToDelete?.username === 'suyash' || userToDelete?.role === 'admin') {
         preventDelete = true;
         return prev;
       }
