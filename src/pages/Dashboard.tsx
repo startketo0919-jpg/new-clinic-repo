@@ -7,7 +7,8 @@ import PatientHistory from '../components/PatientHistory';
 import UpcomingAppointments from '../components/UpcomingAppointments';
 import UserManagement from '../components/UserManagement';
 import DelhiveryCourier from '../components/DelhiveryCourier';
-import { LogOut, Activity, Users, Clock, CheckCircle, XCircle, LayoutDashboard, History, Settings, UserCog, Calendar, Package } from 'lucide-react';
+import ShipmentManagement from '../components/ShipmentManagement';
+import { LogOut, Activity, Users, Clock, CheckCircle, XCircle, LayoutDashboard, History, Settings, UserCog, Calendar, Package, Truck } from 'lucide-react';
 import { getLocalTodayString, isSameDayLocal } from "../lib/dateUtils";
 import WhatsAppWidget from "../components/WhatsAppWidget";
 import { useNavigate } from 'react-router-dom';
@@ -15,9 +16,15 @@ import { useNavigate } from 'react-router-dom';
 export default function Dashboard() {
   const { state, updateUserPassword, updateSettings, resetDatabase, sendWhatsAppMessage } = useClinic();
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState<'queue' | 'history' | 'users' | 'appointments' | 'courier'>('queue');
+  const [activeTab, setActiveTab] = useState<'queue' | 'history' | 'users' | 'appointments' | 'courier' | 'shipments'>('queue');
+  const [delhiveryPrefill, setDelhiveryPrefill] = useState<any>(null);
   const [userRole, setUserRole] = useState<string | null>(null);
   const [username, setUsername] = useState<string | null>(null);
+
+  const handleAutofillDelhivery = (data: any) => {
+    setDelhiveryPrefill(data);
+    setActiveTab('courier');
+  };
   
   useEffect(() => {
     const auth = sessionStorage.getItem('staffAuthenticated');
@@ -52,6 +59,8 @@ export default function Dashboard() {
     const totalWait = completedPatients.reduce((acc, p) => acc + (p.completedTime! - p.checkInTime) / 60000, 0);
     avgWait = Math.round(totalWait / completedPatients.length);
   }
+
+  const pendingShipmentsCount = (state.shipments || []).filter(s => s.status === 'Pending').length;
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col">
@@ -89,14 +98,27 @@ export default function Dashboard() {
             >
               <Calendar className="w-4 h-4" /> Appointments
             </button>
+            <button 
+              onClick={() => setActiveTab('shipments')}
+              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-2 ${
+                activeTab === 'shipments' ? 'bg-teal-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Truck className="w-4 h-4" /> Shipments
+              {pendingShipmentsCount > 0 && (
+                <span className="bg-amber-500 text-slate-950 font-extrabold text-[10px] px-1.5 py-0.5 rounded-full ml-0.5">
+                  {pendingShipmentsCount}
+                </span>
+              )}
+            </button>
             <button
-    onClick={() => setActiveTab('courier')}
-    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-2 ${
-      activeTab === 'courier' ? 'bg-teal-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
-    }`}
-  >
-    <Package className="w-4 h-4" /> Courier
-  </button>
+              onClick={() => setActiveTab('courier')}
+              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-2 ${
+                activeTab === 'courier' ? 'bg-teal-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Package className="w-4 h-4" /> Courier
+            </button>
   {userRole === 'admin' && (
               <button 
                 onClick={() => setActiveTab('users')}
@@ -176,9 +198,14 @@ export default function Dashboard() {
             <UserManagement />
           </div>
         )}
+        {activeTab === 'shipments' && (
+          <div className="lg:col-span-12">
+            <ShipmentManagement onAutofillDelhivery={handleAutofillDelhivery} />
+          </div>
+        )}
         {activeTab === 'courier' && (
           <div className="lg:col-span-12">
-            <DelhiveryCourier />
+            <DelhiveryCourier prefillData={delhiveryPrefill} />
           </div>
         )}
 
