@@ -44,8 +44,8 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
   const [croppedDataUrl, setCroppedDataUrl] = useState<string | null>(null);
   const [cropDimensions, setCropDimensions] = useState<{ width: number; height: number } | null>(null);
 
-  // Thermal Roll Size Presets
-  const [selectedSize, setSelectedSize] = useState<'75x110' | '75x125' | '75x130' | 'auto'>('75x110');
+  // Thermal Roll Size Presets (Default: zero-margin to let printer hardware margins handle borders)
+  const [selectedSize, setSelectedSize] = useState<'zero-margin' | '75x110' | '75x125' | '75x130'>('zero-margin');
   
   // IP Printer Settings (Stored in localStorage)
   const [printerIp, setPrinterIp] = useState(() => localStorage.getItem('thermal_printer_ip') || '192.168.29.2');
@@ -208,7 +208,8 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
       }
     }
 
-    const margin = 4;
+    // Strictly 0 margin on all sides: thermal printer hardware applies its own margins
+    const margin = 0;
     minX = Math.max(0, minX - margin);
     minY = Math.max(0, minY - margin);
     maxX = Math.min(width - 1, maxX + margin);
@@ -237,12 +238,12 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
 
   /**
    * Generates a 100% Vector PDF with selectable text and crystal-clear barcodes.
-   * Adjusts the MediaBox and CropBox to center on the selected thermal roll size.
+   * In zero-margin mode, boundaries are set tightly to the outermost ink with no padding.
    */
   const generateVectorPdf = async (
     rawBytes: ArrayBuffer,
     bounds: PdfBounds,
-    targetSize: '75x110' | '75x125' | '75x130' | 'auto'
+    targetSize: 'zero-margin' | '75x110' | '75x125' | '75x130'
   ) => {
     try {
       const { PDFDocument } = await ensurePdfLibLoaded();
@@ -261,7 +262,8 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
       let newW = cropW;
       let newH = cropH;
 
-      if (targetSize !== 'auto') {
+      // When not in zero-margin mode, expand media box to preset dimensions
+      if (targetSize !== 'zero-margin') {
         const [mmW, mmH] = targetSize === '75x110' ? [75, 110] 
           : targetSize === '75x125' ? [75, 125]
           : [75, 130];
@@ -282,7 +284,7 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
         }
       }
 
-      // Set MediaBox and CropBox in the native PDF stream
+      // Exact zero-margin bounds set into native PDF dictionaries
       page.setMediaBox(newX, newY, newW, newH);
       page.setCropBox(newX, newY, newW, newH);
       page.setBleedBox(newX, newY, newW, newH);
@@ -304,11 +306,11 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
     }
   };
 
-  const handleSizeChange = async (size: '75x110' | '75x125' | '75x130' | 'auto') => {
+  const handleSizeChange = async (size: 'zero-margin' | '75x110' | '75x125' | '75x130') => {
     setSelectedSize(size);
     if (rawPdfBuffer && detectedPdfBounds) {
       setIsLoading(true);
-      setStatusMsg(`Re-centering vector PDF to ${size === 'auto' ? 'Auto Crop' : size + ' mm'}...`);
+      setStatusMsg(`Applying ${size === 'zero-margin' ? 'Zero Margin' : size + ' mm'}...`);
       await generateVectorPdf(rawPdfBuffer, detectedPdfBounds, size);
       setIsLoading(false);
       setStatusMsg(null);
@@ -772,8 +774,8 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
 
                   {/* Footer Info */}
                   <div className="flex items-center justify-between px-1 text-[11px] text-slate-500 font-mono">
-                    <span>Roll: {selectedSize === 'auto' ? 'Tight Auto-Crop' : `${selectedSize} mm`}</span>
-                    <span className="text-emerald-700 font-semibold">Lossless Vector (Infinite DPI)</span>
+                    <span>Margins: {selectedSize === 'zero-margin' ? 'Strict 0mm (Flush to Ink)' : `${selectedSize} mm roll`}</span>
+                    <span className="text-emerald-700 font-semibold">0 Margins &bull; Infinite DPI</span>
                   </div>
                 </div>
               ) : (
@@ -787,33 +789,33 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
             {/* Right: Thermal Printer Settings & Actions */}
             <div className="lg:col-span-5 space-y-4">
               
-              {/* Size Presets */}
+              {/* Size & Margin Options */}
               <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-2.5">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-slate-800 uppercase tracking-wider block">
-                    Thermal Label Roll Size
+                    Thermal Margins & Roll Sizing
                   </span>
-                  <span className="text-[10px] text-teal-700 bg-teal-50 px-2 py-0.5 rounded font-semibold border border-teal-200">
-                    Vector Preserved
+                  <span className="text-[10px] text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded font-semibold border border-emerald-200">
+                    0mm Zero Margin
                   </span>
                 </div>
                 <div className="grid grid-cols-4 gap-1.5">
-                  {(['75x110', '75x125', '75x130', 'auto'] as const).map(size => (
+                  {(['zero-margin', '75x110', '75x125', '75x130'] as const).map(size => (
                     <button
                       key={size}
                       onClick={() => handleSizeChange(size)}
-                      className={`py-2 px-1.5 text-xs rounded-xl font-medium border text-center transition-all cursor-pointer ${
+                      className={`py-2 px-1 text-xs rounded-xl font-medium border text-center transition-all cursor-pointer ${
                         selectedSize === size
-                          ? 'border-teal-600 bg-teal-50 text-teal-900 font-bold shadow-xs'
+                          ? 'border-teal-600 bg-teal-50 text-teal-900 font-bold shadow-xs ring-1 ring-teal-500'
                           : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
                       }`}
                     >
-                      {size === 'auto' ? 'Auto Crop' : `${size} mm`}
+                      {size === 'zero-margin' ? '0mm Margin' : `${size} mm`}
                     </button>
                   ))}
                 </div>
-                <span className="text-[11px] text-slate-400 block">
-                  Select 75x110mm for standard rolls or Auto Crop to fit content tightly.
+                <span className="text-[11px] text-slate-500 block">
+                  &bull; <strong>0mm Margin (Recommended)</strong>: Crops flush to outermost ink with 0 white margin on all sides, letting your thermal printer's physical hardware margins align the label.
                 </span>
               </div>
 
