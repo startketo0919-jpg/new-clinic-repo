@@ -8,7 +8,7 @@ import cors from "cors";
 import { createServer as createViteServer } from "vite";
 import { db } from "./src/db/index.js";
 import { initDb } from "./src/db/init.js";
-import { liveQueue, patientRegistry, users, appointments, settings, whatsappMessages, whatsappTemplates, delhiveryOrders } from "./src/db/schema.js";
+import { liveQueue, patientRegistry, users, appointments, settings, whatsappMessages, whatsappTemplates, delhiveryOrders, patientShipments } from "./src/db/schema.js";
 import { eq, desc, asc, and } from "drizzle-orm";
 // We don't enforce requireAuth for all actions since patients self-checkin, but we should in production.
 import { requireAuth, AuthRequest } from "./src/middleware/auth.js";
@@ -47,6 +47,7 @@ async function startServer() {
       const dbPatients = await db.select().from(liveQueue).orderBy(asc(liveQueue.sortOrder), asc(liveQueue.checkInTime));
       const dbRegistry = await db.select().from(patientRegistry);
       const dbAppointments = await db.select().from(appointments);
+      const dbShipments = await db.select().from(patientShipments).orderBy(desc(patientShipments.createdAt));
       const dbMessages = await db.select().from(whatsappMessages).orderBy(whatsappMessages.timestamp);
       const dbTemplates = await db.select().from(whatsappTemplates);
       const dbSettings = await db.select().from(settings).where(eq(settings.id, "default")).limit(1);
@@ -62,6 +63,7 @@ async function startServer() {
         patients: dbPatients.map(p => ({ ...p, checkInTime: p.checkInTime.getTime(), completedTime: p.completedTime?.getTime() })),
         patientRegistry: dbRegistry.map(p => ({ ...p, firstVisit: p.firstVisit.getTime(), lastVisited: p.lastVisited?.getTime(), followUpDate: p.followUpDate?.getTime() })),
         appointments: dbAppointments,
+        shipments: dbShipments.map(s => ({ ...s, createdAt: s.createdAt.getTime(), completedAt: s.completedAt ? s.completedAt.getTime() : undefined })),
         templates: dbTemplates,
         messages: dbMessages.map(m => ({...m, timestamp: m.timestamp.getTime()})),
         users: dbUsers,
@@ -72,6 +74,110 @@ async function startServer() {
       });
     } catch (error: any) {
       res.status(500).json({ error: "Failed to fetch state" });
+    }
+  });
+
+  // Anti-spam in-memory rate limiter: max 5 submissions per 15 minutes per IP
+  const ipSubmissionTracker = new Map<string, number[]>();
+
+  app.post('/api/shipments/submit', async (req, res) => {
+    try {
+      const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() || req.socket.remoteAddress || 'unknown';
+      const now = Date.now();
+
+      // 1. Rate Limiting: 5 submissions per 15 mins (900,000 ms)
+      const timestamps = ipSubmissionTracker.get(clientIp) || [];
+      const recentTimestamps = timestamps.filter(t => now - t < 15 * 60 * 1000);
+      if (recentTimestamps.length >= 5) {
+        return res.status(429).json({ error: "Too many submissions from this connection. Please wait 15 minutes." });
+      }
+
+      const { patientName, phone, email, address, pincode, notes, botField, formLoadTime } = req.body;
+
+      // 2. Honeypot check: botField must be empty
+      if (botField) {
+        console.warn(`[SPAM DETECTED] Honeypot filled by IP ${clientIp}`);
+        return res.json({ success: true, message: "Details submitted successfully." });
+      }
+
+      // 3. Time speed check: bots submit too quickly (< 2000 ms)
+      if (formLoadTime && (now - Number(formLoadTime)) < 2000) {
+        console.warn(`[SPAM DETECTED] Too fast submission from IP ${clientIp}`);
+        return res.json({ success: true, message: "Details submitted successfully." });
+      }
+
+      // 4. Strict Validation
+      if (!patientName || typeof patientName !== 'string' || patientName.trim().length < 2) {
+        return res.status(400).json({ error: "Please enter a valid Patient Name." });
+      }
+
+      const cleanPhone = phone ? String(phone).replace(/\D/g, '') : '';
+      const validPhone = cleanPhone.length === 10 ? cleanPhone : (cleanPhone.length === 12 && cleanPhone.startsWith('91') ? cleanPhone.slice(2) : cleanPhone);
+      if (!/^[6-9]\d{9}$/.test(validPhone)) {
+        return res.status(400).json({ error: "Please enter a valid 10-digit Indian Mobile Number." });
+      }
+
+      if (!address || typeof address !== 'string' || address.trim().length < 8) {
+        return res.status(400).json({ error: "Please enter a complete delivery address with landmark and city." });
+      }
+
+      const cleanPincode = pincode ? String(pincode).trim() : '';
+      if (!/^\d{6}$/.test(cleanPincode)) {
+        return res.status(400).json({ error: "Please enter a valid 6-digit PIN code." });
+      }
+
+      recentTimestamps.push(now);
+      ipSubmissionTracker.set(clientIp, recentTimestamps);
+
+      const id = 'ship_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+
+      await db.insert(patientShipments).values({
+        id,
+        patientName: patientName.trim(),
+        phone: validPhone,
+        email: email ? String(email).trim() : null,
+        address: address.trim(),
+        pincode: cleanPincode,
+        notes: notes ? String(notes).trim() : null,
+        status: 'Pending',
+      });
+
+      notifyClients();
+      res.json({ success: true, id, message: "Shipment details saved successfully!" });
+    } catch (e: any) {
+      console.error("Error saving shipment:", e);
+      res.status(500).json({ error: "Failed to save shipment details." });
+    }
+  });
+
+  app.patch('/api/shipments/:id/status', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { status } = req.body;
+      const validStatus = status === 'Completed' ? 'Completed' : 'Pending';
+      const completedAt = validStatus === 'Completed' ? new Date() : null;
+
+      await db.update(patientShipments)
+        .set({ status: validStatus, completedAt })
+        .where(eq(patientShipments.id, id));
+
+      notifyClients();
+      res.json({ success: true });
+    } catch (e: any) {
+      console.error("Error updating shipment status:", e);
+      res.status(500).json({ error: "Failed to update shipment status." });
+    }
+  });
+
+  app.delete('/api/shipments/:id', async (req, res) => {
+    try {
+      const { id } = req.params;
+      await db.delete(patientShipments).where(eq(patientShipments.id, id));
+      notifyClients();
+      res.json({ success: true });
+    } catch (e: any) {
+      console.error("Error deleting shipment:", e);
+      res.status(500).json({ error: "Failed to delete shipment." });
     }
   });
 
