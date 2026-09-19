@@ -112,3 +112,17 @@ export const delhiveryOrders = pgTable("delhivery_orders", {
   status: varchar("status", { length: 50 }).default("Created"),
   timestamp: timestamp("timestamp").notNull().defaultNow(),
 });
+
+export const patientShipments = pgTable("patient_shipments", {
+  id: text("id").primaryKey(),
+  patientName: text("patient_name").notNull(),
+  phone: varchar("phone", { length: 20 }).notNull(),
+  email: varchar("email", { length: 255 }),
+  address: text("address").notNull(),
+  pincode: varchar("pincode", { length: 10 }).notNull(),
+  notes: text("notes"),
+  status: varchar("status", { length: 50 }).notNull().default("Pending"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  completedAt: timestamp("completed_at"),
+});
+
