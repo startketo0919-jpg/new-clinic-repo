@@ -2,7 +2,16 @@ import React, { useState, useEffect } from 'react';
 import { Package, Truck, FileText, Search, Plus, Trash2, CheckCircle2, History as HistoryIcon, Download, XCircle, Copy, AlertCircle, Calendar, Clock, ChevronDown, ChevronUp, RefreshCw, MessageSquare, Phone, MapPin, ExternalLink, Send } from 'lucide-react';
 import { useClinic } from '../context/ClinicContext';
 
-export default function DelhiveryCourier() {
+interface DelhiveryCourierProps {
+  prefillData?: {
+    consigneeName: string;
+    consigneePhone: string;
+    consigneeAddress: string;
+    consigneePincode: string;
+  } | null;
+}
+
+export default function DelhiveryCourier({ prefillData }: DelhiveryCourierProps = {}) {
   const { state } = useClinic();
   const [activeTab, setActiveTab] = useState<'new_order' | 'pickup' | 'manage' | 'history'>('new_order');
   
@@ -13,6 +22,16 @@ export default function DelhiveryCourier() {
   const [consigneePhone, setConsigneePhone] = useState('');
   const [consigneeAddress, setConsigneeAddress] = useState('');
   const [consigneePincode, setConsigneePincode] = useState('');
+
+  useEffect(() => {
+    if (prefillData) {
+      if (prefillData.consigneeName) setConsigneeName(prefillData.consigneeName);
+      if (prefillData.consigneePhone) setConsigneePhone(prefillData.consigneePhone);
+      if (prefillData.consigneeAddress) setConsigneeAddress(prefillData.consigneeAddress);
+      if (prefillData.consigneePincode) setConsigneePincode(prefillData.consigneePincode);
+      setActiveTab('new_order');
+    }
+  }, [prefillData]);
   const [consigneeCity, setConsigneeCity] = useState('');
   const [consigneeState, setConsigneeState] = useState('');
   const [packageType, setPackageType] = useState<'Box' | 'Flyer'>('Box');
