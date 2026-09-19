@@ -53,19 +53,54 @@ async function startServer() {
       const dbSettings = await db.select().from(settings).where(eq(settings.id, "default")).limit(1);
       let dbUsers = await db.select().from(users);
 
-      if (!dbUsers.some(u => u.username === 'admin')) {
-         const adminUser = { id: "1", username: 'admin', passwordHash: 'Suyash@0919', role: 'admin', email: 'skgservicesin@gmail.com' };
-         await db.insert(users).values(adminUser);
-         dbUsers = await db.select().from(users);
+      if (!dbUsers.some(u => u.username && u.username.toLowerCase() === 'admin')) {
+        try {
+          const adminPass = process.env.ADMIN_PASSWORD || 'Suyash@0919';
+          await pool.query(`
+            INSERT IGNORE INTO users (id, username, password_hash, role, email) 
+            VALUES ('1', 'admin', ?, 'admin', 'skgservicesin@gmail.com')
+          `, [adminPass]);
+          dbUsers = await db.select().from(users);
+        } catch (insertErr) {
+          console.warn("[Users] Safe insert ignore warning:", insertErr);
+        }
       }
 
+      const parseDate = (d: any): number => {
+        if (!d) return Date.now();
+        const time = new Date(d).getTime();
+        return isNaN(time) ? Date.now() : time;
+      };
+
+      const parseOptionalDate = (d: any): number | undefined => {
+        if (!d) return undefined;
+        const time = new Date(d).getTime();
+        return isNaN(time) ? undefined : time;
+      };
+
       res.json({
-        patients: dbPatients.map(p => ({ ...p, checkInTime: p.checkInTime.getTime(), completedTime: p.completedTime?.getTime() })),
-        patientRegistry: dbRegistry.map(p => ({ ...p, firstVisit: p.firstVisit.getTime(), lastVisited: p.lastVisited?.getTime(), followUpDate: p.followUpDate?.getTime() })),
+        patients: dbPatients.map(p => ({ 
+          ...p, 
+          checkInTime: parseDate(p.checkInTime), 
+          completedTime: parseOptionalDate(p.completedTime) 
+        })),
+        patientRegistry: dbRegistry.map(p => ({ 
+          ...p, 
+          firstVisit: parseDate(p.firstVisit), 
+          lastVisited: parseOptionalDate(p.lastVisited), 
+          followUpDate: parseOptionalDate(p.followUpDate) 
+        })),
         appointments: dbAppointments,
-        shipments: dbShipments.map(s => ({ ...s, createdAt: s.createdAt.getTime(), completedAt: s.completedAt ? s.completedAt.getTime() : undefined })),
+        shipments: dbShipments.map(s => ({ 
+          ...s, 
+          createdAt: parseDate(s.createdAt), 
+          completedAt: parseOptionalDate(s.completedAt) 
+        })),
         templates: dbTemplates,
-        messages: dbMessages.map(m => ({...m, timestamp: m.timestamp.getTime()})),
+        messages: dbMessages.map(m => ({
+          ...m, 
+          timestamp: parseDate(m.timestamp)
+        })),
         users: dbUsers,
         settings: dbSettings[0] || { 
           whatsappApiKey: "", whatsappPhoneId: "", currentPatientId: null, nextSequence: 1,
@@ -81,11 +116,22 @@ async function startServer() {
   app.get("/api/db-status", async (req, res) => {
     try {
       const [rows] = await (pool as any).query("SHOW TABLES;");
+      const [userCount] = await (pool as any).query("SELECT COUNT(*) as count FROM users;");
+      const [queueCount] = await (pool as any).query("SELECT COUNT(*) as count FROM live_queue;");
+      const [patientCount] = await (pool as any).query("SELECT COUNT(*) as count FROM patient_registry;");
+      const [orderCount] = await (pool as any).query("SELECT COUNT(*) as count FROM delhivery_orders;");
+
       res.json({
         success: true,
         host: process.env.MYSQL_HOST || 'not configured',
         database: process.env.MYSQL_DATABASE || 'not configured',
         tables: rows,
+        counts: {
+          users: userCount[0]?.count || 0,
+          liveQueue: queueCount[0]?.count || 0,
+          patients: patientCount[0]?.count || 0,
+          delhiveryOrders: orderCount[0]?.count || 0,
+        }
       });
     } catch (err: any) {
       res.status(500).json({
