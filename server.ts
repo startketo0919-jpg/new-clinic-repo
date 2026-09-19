@@ -784,33 +784,21 @@ app.post("/api/action", async (req, res) => {
       const data = await response.json();
       
       const pkg = data.packages?.[0];
-      const awb = pkg?.waybill || data.upload_wbn || data.waybill || null;
+      let awb = pkg?.waybill || data.upload_wbn || data.waybill || null;
+      if (!awb && data.packages && Array.isArray(data.packages) && data.packages.length > 0) {
+        awb = data.packages[0].waybill || data.packages[0].wbn || null;
+      }
       
       // Save locally if created or waybill exists, without failing the request on DB conflict
       if (awb || data.success || (pkg && pkg.status === 'Success')) {
         try {
           const recordId = awb ? String(awb) : `ORDER_${orderId}_${Date.now()}`;
-          await db.insert(delhiveryOrders).values({
-            id: recordId,
-            orderId: String(orderId),
-            awb: awb || null,
-            warehouse: warehouse || '',
-            consigneeName: name || '',
-            consigneePhone: phone || '',
-            consigneeAddress: address || '',
-            consigneePincode: String(pincode || ''),
-            weight: Number(weight) || 500,
-            length: Number(length) || 10,
-            width: Number(width) || 10,
-            height: Number(height) || 10,
-            paymentMode: paymentMode || 'Prepaid',
-            items: JSON.stringify(items || []),
-            status: 'Manifested'
-          }).onConflictDoUpdate({
-            target: delhiveryOrders.id,
-            set: {
-              awb: awb || null,
-              status: 'Manifested',
+          const existing = await db.select().from(delhiveryOrders).where(eq(delhiveryOrders.id, recordId)).limit(1);
+          if (existing.length > 0) {
+            await db.update(delhiveryOrders).set({
+              orderId: String(orderId),
+              awb: awb ? String(awb) : null,
+              warehouse: warehouse || '',
               consigneeName: name || '',
               consigneePhone: phone || '',
               consigneeAddress: address || '',
@@ -820,12 +808,35 @@ app.post("/api/action", async (req, res) => {
               width: Number(width) || 10,
               height: Number(height) || 10,
               paymentMode: paymentMode || 'Prepaid',
-              items: JSON.stringify(items || [])
-            }
-          });
+              items: JSON.stringify(items || []),
+              status: 'Manifested'
+            }).where(eq(delhiveryOrders.id, recordId));
+          } else {
+            await db.insert(delhiveryOrders).values({
+              id: recordId,
+              orderId: String(orderId),
+              awb: awb ? String(awb) : null,
+              warehouse: warehouse || '',
+              consigneeName: name || '',
+              consigneePhone: phone || '',
+              consigneeAddress: address || '',
+              consigneePincode: String(pincode || ''),
+              weight: Number(weight) || 500,
+              length: Number(length) || 10,
+              width: Number(width) || 10,
+              height: Number(height) || 10,
+              paymentMode: paymentMode || 'Prepaid',
+              items: JSON.stringify(items || []),
+              status: 'Manifested'
+            });
+          }
+          console.log(`[Delhivery] Successfully saved order ${orderId} (AWB: ${awb}) to database.`);
+          notifyClients();
         } catch (dbErr) {
-          console.error('Database write warning (Delhivery order placed successfully):', dbErr);
+          console.error('Database write error for Delhivery order:', dbErr);
         }
+      } else {
+        console.warn('[Delhivery] Order creation did not return AWB or success:', data);
       }
       
       res.json(data);
@@ -1146,10 +1157,88 @@ app.post("/api/action", async (req, res) => {
 
   app.get('/api/delhivery/orders', async (req, res) => {
     try {
-      
       const orders = await db.select().from(delhiveryOrders).orderBy(desc(delhiveryOrders.timestamp));
       res.json(orders);
-    } catch (e) {
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Import / Sync an existing Delhivery shipment by AWB into local order history
+  app.post('/api/delhivery/import-order', async (req, res) => {
+    try {
+      const dbSettings = await db.select().from(settings).where(eq(settings.id, "default")).limit(1);
+      const s = dbSettings[0];
+      if (!s || !s.delhiveryApiKey) return res.status(400).json({ error: 'Delhivery API Key not configured' });
+
+      const { awb } = req.body;
+      if (!awb || !String(awb).trim()) {
+        return res.status(400).json({ error: 'AWB / Waybill number is required' });
+      }
+
+      const cleanAwb = String(awb).trim();
+      const url = `https://track.delhivery.com/api/v1/packages/json/?waybill=${encodeURIComponent(cleanAwb)}`;
+
+      const trackRes = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Token ${s.delhiveryApiKey.trim()}`,
+          'Accept': 'application/json'
+        }
+      });
+
+      const trackData = await trackRes.json();
+      const shipment = trackData.ShipmentData?.[0]?.Shipment;
+
+      if (!shipment) {
+        return res.status(404).json({ error: `No shipment found for AWB "${cleanAwb}". Please check the number.` });
+      }
+
+      const orderId = String(shipment.ReferenceNo || cleanAwb);
+      const consigneeName = shipment.Consignee?.Name || 'Consignee';
+      const consigneePhone = shipment.Consignee?.Phone || '';
+      const consigneeAddress = shipment.Consignee?.Address || (shipment.Destination || '');
+      const consigneePincode = String(shipment.Consignee?.PinCode || '');
+      const warehouse = shipment.PickupLocation || '';
+      const currentStatus = shipment.Status?.Status || shipment.Status?.Instructions || 'Manifested';
+      const orderDate = shipment.Status?.StatusDateTime ? new Date(shipment.Status.StatusDateTime) : new Date();
+
+      const existing = await db.select().from(delhiveryOrders).where(eq(delhiveryOrders.id, cleanAwb)).limit(1);
+      if (existing.length > 0) {
+        await db.update(delhiveryOrders).set({
+          orderId,
+          awb: cleanAwb,
+          warehouse,
+          consigneeName,
+          consigneePhone,
+          consigneeAddress,
+          consigneePincode,
+          status: currentStatus,
+        }).where(eq(delhiveryOrders.id, cleanAwb));
+      } else {
+        await db.insert(delhiveryOrders).values({
+          id: cleanAwb,
+          orderId,
+          awb: cleanAwb,
+          warehouse,
+          consigneeName,
+          consigneePhone,
+          consigneeAddress,
+          consigneePincode,
+          weight: 500,
+          length: 10,
+          width: 10,
+          height: 10,
+          paymentMode: shipment.OrderType || 'Prepaid',
+          items: JSON.stringify([{ name: 'Medicine / Package', price: Number(shipment.InvoiceAmount || 0) }]),
+          status: currentStatus,
+          timestamp: orderDate,
+        });
+      }
+
+      notifyClients();
+      res.json({ success: true, message: `AWB ${cleanAwb} successfully imported into History!`, orderId, awb: cleanAwb });
+    } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
   });

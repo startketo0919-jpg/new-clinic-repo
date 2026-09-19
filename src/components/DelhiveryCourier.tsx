@@ -98,6 +98,9 @@ export default function DelhiveryCourier({ prefillData }: DelhiveryCourierProps 
 
   // History State
   const [history, setHistory] = useState<any[]>([]);
+  const [importAwb, setImportAwb] = useState('');
+  const [isImportingAwb, setIsImportingAwb] = useState(false);
+  const [importMessage, setImportMessage] = useState<{ success: boolean; text: string } | null>(null);
   
   const fetchHistory = async () => {
     try {
@@ -108,6 +111,31 @@ export default function DelhiveryCourier({ prefillData }: DelhiveryCourierProps 
       }
     } catch (e) {
       console.error(e);
+    }
+  };
+
+  const handleImportAwb = async () => {
+    if (!importAwb.trim()) return;
+    setIsImportingAwb(true);
+    setImportMessage(null);
+    try {
+      const res = await fetch('/api/delhivery/import-order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ awb: importAwb.trim() })
+      });
+      const data = await res.json();
+      setIsImportingAwb(false);
+      if (res.ok && data.success) {
+        setImportMessage({ success: true, text: data.message || 'Order imported successfully!' });
+        setImportAwb('');
+        fetchHistory();
+      } else {
+        setImportMessage({ success: false, text: data.error || 'Failed to import order.' });
+      }
+    } catch (e: any) {
+      setIsImportingAwb(false);
+      setImportMessage({ success: false, text: e.message || 'Network error importing order.' });
     }
   };
 
@@ -1150,7 +1178,56 @@ export default function DelhiveryCourier({ prefillData }: DelhiveryCourierProps 
                </button>
              </div>
 
-             {/* WhatsApp Feedback Banner */}
+              {/* Quick Import / Restore AWB */}
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                <div className="relative flex-1">
+                  <input
+                    type="text"
+                    placeholder="Have an existing Delhivery AWB? Enter waybill to restore missing order into history..."
+                    value={importAwb}
+                    onChange={e => setImportAwb(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') handleImportAwb(); }}
+                    className="w-full pl-8 pr-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-mono focus:ring-1 focus:ring-indigo-500"
+                  />
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+                </div>
+                <button
+                  type="button"
+                  onClick={handleImportAwb}
+                  disabled={isImportingAwb || !importAwb.trim()}
+                  className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors shrink-0 shadow-2xs"
+                >
+                  {isImportingAwb ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+                  <span>{isImportingAwb ? 'Importing...' : 'Restore / Import AWB'}</span>
+                </button>
+              </div>
+
+              {/* Import Message Feedback Banner */}
+              {importMessage && (
+                <div className={`p-3 rounded-xl text-xs flex items-center justify-between border ${
+                  importMessage.success 
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-900' 
+                    : 'bg-rose-50 border-rose-200 text-rose-900'
+                }`}>
+                  <div className="flex items-center gap-2">
+                    {importMessage.success ? (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    ) : (
+                      <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                    )}
+                    <span>{importMessage.text}</span>
+                  </div>
+                  <button 
+                    type="button" 
+                    onClick={() => setImportMessage(null)}
+                    className="text-slate-400 hover:text-slate-700 font-bold ml-2"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
+
+              {/* WhatsApp Feedback Banner */}
              {whatsappStatus && (
                <div className={`p-3.5 rounded-xl text-xs flex items-center justify-between border ${
                  whatsappStatus.success 
