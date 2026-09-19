@@ -18,21 +18,25 @@ export const createPool = () => {
         queueLimit: 0,
       });
     } else {
-      // Explicit Hostinger MySQL configuration (ignoring legacy SQL_* Postgres vars)
-      const host = process.env.MYSQL_HOST || 'srv1873.hstgr.io';
+      // Read configuration exclusively from environment variables
+      const host = process.env.MYSQL_HOST;
       const port = parseInt(process.env.MYSQL_PORT || '3306', 10);
-      const user = process.env.MYSQL_USER || 'u670657683_clinic_user';
-      const password = process.env.MYSQL_PASSWORD || 'Suyash@0919';
-      const database = process.env.MYSQL_DATABASE || 'u670657683_clinic_app';
+      const user = process.env.MYSQL_USER;
+      const password = process.env.MYSQL_PASSWORD;
+      const database = process.env.MYSQL_DATABASE;
 
-      console.log(`[DB] Initializing MySQL pool for ${user}@${host}:${port}/${database}`);
+      if (!host || !user || !password || !database) {
+        console.warn(`[DB] Warning: Missing MySQL configuration! Please define MYSQL_HOST, MYSQL_USER, MYSQL_PASSWORD, and MYSQL_DATABASE in environment variables.`);
+      }
+
+      console.log(`[DB] Initializing MySQL pool for ${user || '(not set)'}@${host || '(not set)'}:${port}/${database || '(not set)'}`);
 
       global._mysqlPool = mysql.createPool({
-        host,
+        host: host || 'localhost',
         port,
-        user,
-        password,
-        database,
+        user: user || '',
+        password: password || '',
+        database: database || '',
         waitForConnections: true,
         connectionLimit: 10,
         queueLimit: 0,

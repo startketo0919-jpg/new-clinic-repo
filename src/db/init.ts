@@ -1,7 +1,7 @@
 import { pool } from './index.js';
 
 export async function initDb() {
-  console.log("Initializing MySQL database tables on srv1873.hstgr.io if not exist...");
+  console.log("Initializing MySQL database tables if not exist...");
 
   const queries = [
     `CREATE TABLE IF NOT EXISTS patient_registry (

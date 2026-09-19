@@ -83,8 +83,8 @@ async function startServer() {
       const [rows] = await (pool as any).query("SHOW TABLES;");
       res.json({
         success: true,
-        host: process.env.MYSQL_HOST || 'srv1873.hstgr.io',
-        database: 'u670657683_clinic_app',
+        host: process.env.MYSQL_HOST || 'not configured',
+        database: process.env.MYSQL_DATABASE || 'not configured',
         tables: rows,
       });
     } catch (err: any) {
@@ -92,7 +92,8 @@ async function startServer() {
         success: false,
         error: err.message,
         code: err.code,
-        host: process.env.MYSQL_HOST || 'srv1873.hstgr.io',
+        host: process.env.MYSQL_HOST || 'not configured',
+        database: process.env.MYSQL_DATABASE || 'not configured',
       });
     }
   });
