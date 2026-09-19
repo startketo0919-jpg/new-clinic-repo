@@ -8,9 +8,9 @@ declare global {
 
 export const createPool = () => {
   if (!global._mysqlPool) {
+    // Only use DATABASE_URL if it explicitly begins with mysql://
     const connectionString = process.env.DATABASE_URL;
-
-    if (connectionString && connectionString.startsWith('mysql')) {
+    if (connectionString && connectionString.startsWith('mysql://')) {
       global._mysqlPool = mysql.createPool({
         uri: connectionString,
         waitForConnections: true,
@@ -18,12 +18,21 @@ export const createPool = () => {
         queueLimit: 0,
       });
     } else {
+      // Explicit Hostinger MySQL configuration (ignoring legacy SQL_* Postgres vars)
+      const host = process.env.MYSQL_HOST || 'srv1873.hstgr.io';
+      const port = parseInt(process.env.MYSQL_PORT || '3306', 10);
+      const user = process.env.MYSQL_USER || 'u670657683_clinic_user';
+      const password = process.env.MYSQL_PASSWORD || 'Suyash@0919';
+      const database = process.env.MYSQL_DATABASE || 'u670657683_clinic_app';
+
+      console.log(`[DB] Initializing MySQL pool for ${user}@${host}:${port}/${database}`);
+
       global._mysqlPool = mysql.createPool({
-        host: process.env.MYSQL_HOST || process.env.SQL_HOST || 'srv1873.hstgr.io',
-        port: parseInt(process.env.MYSQL_PORT || process.env.SQL_PORT || '3306', 10),
-        user: process.env.MYSQL_USER || process.env.SQL_USER || 'u670657683_clinic_user',
-        password: process.env.MYSQL_PASSWORD || process.env.SQL_PASSWORD || 'Suyash@0919',
-        database: process.env.MYSQL_DATABASE || process.env.SQL_DB_NAME || 'u670657683_clinic_app',
+        host,
+        port,
+        user,
+        password,
+        database,
         waitForConnections: true,
         connectionLimit: 10,
         queueLimit: 0,

@@ -6,7 +6,7 @@ import nodemailer from "nodemailer";
 import path from "path";
 import cors from "cors";
 import { createServer as createViteServer } from "vite";
-import { db } from "./src/db/index.js";
+import { db, pool } from "./src/db/index.js";
 import { initDb } from "./src/db/init.js";
 import { liveQueue, patientRegistry, users, appointments, settings, whatsappMessages, whatsappTemplates, delhiveryOrders, patientShipments } from "./src/db/schema.js";
 import { eq, desc, asc, and } from "drizzle-orm";
@@ -73,7 +73,46 @@ async function startServer() {
         }
       });
     } catch (error: any) {
-      res.status(500).json({ error: "Failed to fetch state" });
+      res.status(500).json({ error: "Failed to fetch state", details: error.message });
+    }
+  });
+
+  // Diagnostic endpoint to verify MySQL connectivity live
+  app.get("/api/db-status", async (req, res) => {
+    try {
+      const [rows] = await (pool as any).query("SHOW TABLES;");
+      res.json({
+        success: true,
+        host: process.env.MYSQL_HOST || 'srv1873.hstgr.io',
+        database: 'u670657683_clinic_app',
+        tables: rows,
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        error: err.message,
+        code: err.code,
+        host: process.env.MYSQL_HOST || 'srv1873.hstgr.io',
+      });
+    }
+  });
+
+  // Diagnostic endpoint to trigger database table creation and inspect output
+  app.get("/api/init-db", async (req, res) => {
+    try {
+      await initDb();
+      const [rows] = await (pool as any).query("SHOW TABLES;");
+      res.json({
+        success: true,
+        message: "Database tables initialized successfully",
+        tables: rows,
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        error: err.message,
+        code: err.code,
+      });
     }
   });
 
