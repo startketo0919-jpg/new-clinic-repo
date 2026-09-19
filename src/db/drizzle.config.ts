@@ -3,24 +3,13 @@ import * as dotenv from "dotenv";
 
 dotenv.config();
 
-const sqlHost = process.env.SQL_HOST;
-const sqlDbName = process.env.SQL_DB_NAME;
-const user = process.env.SQL_ADMIN_USER;
-const password = process.env.SQL_ADMIN_PASSWORD;
-
-if (!sqlHost || !sqlDbName || !user || !password) {
-  console.log("Missing environment variables for drizzle.config.ts. Using empty string for build test.");
-}
-
 export default defineConfig({
-  dialect: "postgresql",
+  dialect: "mysql",
   schema: "./src/db/schema.ts",
   dbCredentials: {
-    host: sqlHost || "",
-    user: user || "",
-    password: password || "",
-    database: sqlDbName || "",
-    ssl: false,
+    host: process.env.MYSQL_HOST || process.env.SQL_HOST || "127.0.0.1",
+    user: process.env.MYSQL_USER || process.env.SQL_USER || "u670657683_clinic_user",
+    password: process.env.MYSQL_PASSWORD || process.env.SQL_PASSWORD || "Suyash@0919",
+    database: process.env.MYSQL_DATABASE || process.env.SQL_DB_NAME || "u670657683_clinic_app",
   },
 });
-
