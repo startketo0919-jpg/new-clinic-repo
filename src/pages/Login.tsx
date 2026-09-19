@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
-import { Stethoscope, Monitor, Smartphone, UserRound, Lock, KeyRound, Mail, ArrowLeft, RefreshCw, CheckCircle2, ShieldCheck } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Stethoscope, Monitor, Smartphone, UserRound, Lock, KeyRound, Mail, ArrowLeft, RefreshCw, CheckCircle2 } from 'lucide-react';
 import { useClinic } from '../context/ClinicContext';
 
 export default function Login() {
@@ -20,6 +20,11 @@ export default function Login() {
 
   // 30s Countdown timer for Resend OTP
   const [resendCountdown, setResendCountdown] = useState(0);
+
+  const maskEmail = (emailStr: string) => {
+    if (!emailStr) return '';
+    return emailStr.replace(/(\w{3})[\w.-]+@([\w.]+\w)/, "$1***@$2");
+  };
 
   useEffect(() => {
     let timer: any = null;
@@ -130,7 +135,7 @@ export default function Login() {
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Failed to resend code');
-        setSuccessMsg(`New reset code sent to ${userEmail}`);
+        setSuccessMsg(`New reset code sent to ${maskEmail(userEmail)}`);
       } else {
         const res = await fetch('/api/send-otp', {
           method: 'POST',
@@ -139,7 +144,7 @@ export default function Login() {
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Failed to resend OTP');
-        setSuccessMsg(`New OTP sent to ${userEmail}`);
+        setSuccessMsg(`New OTP sent to ${maskEmail(userEmail)}`);
       }
       setResendCountdown(30);
     } catch (err: any) {
@@ -205,7 +210,7 @@ export default function Login() {
       setUserEmail(data.email || identifier.trim());
       setResendCountdown(30);
       setStep('reset');
-      setSuccessMsg(`Password reset code sent to ${data.email || identifier}`);
+      setSuccessMsg(`Password reset code sent to ${maskEmail(data.email || identifier)}`);
     } catch (err: any) {
       setLoading(false);
       setError(err.message);
@@ -457,7 +462,7 @@ export default function Login() {
               /* Email OTP Verification Form */
               <form onSubmit={handleVerifyOtp} className="flex flex-col gap-3">
                 <p className="text-sm text-slate-600 mb-2 text-center bg-teal-50 p-3 rounded-lg border border-teal-100">
-                  Secure OTP sent to <br/><strong>{userEmail.replace(/(\w{3})[\w.-]+@([\w.]+\w)/, "$1***@$2")}</strong>
+                  Secure OTP sent to <br/><strong>{maskEmail(userEmail)}</strong>
                 </p>
 
                 {successMsg && (
@@ -521,7 +526,7 @@ export default function Login() {
               /* Forgot Password - Step 2: Enter Code & New Password */
               <form onSubmit={handleResetPasswordSubmit} className="flex flex-col gap-3">
                 <p className="text-sm text-slate-600 mb-1 text-center bg-teal-50 p-2.5 rounded-lg border border-teal-100">
-                  Reset code sent to <br/><strong>{userEmail.replace(/(\w{3})[\w.-]+@([\w.]+\w)/, "$1***@$2")}</strong>
+                  Reset code sent to <br/><strong>{maskEmail(userEmail)}</strong>
                 </p>
 
                 {successMsg && (
@@ -604,14 +609,6 @@ export default function Login() {
               <Monitor className="w-4 h-4" />
               Open Waiting Room TV
             </button>
-
-            {/* Superadmin Setup Portal Link for Initial Installation */}
-            <div className="text-center mt-2">
-              <Link to="/setup" className="text-xs text-slate-400 hover:text-teal-600 transition-colors inline-flex items-center gap-1">
-                <ShieldCheck className="w-3.5 h-3.5" />
-                <span>Superadmin Initial Setup Portal (/setup)</span>
-              </Link>
-            </div>
 
           </div>
         </div>
