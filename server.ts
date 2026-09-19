@@ -1031,6 +1031,28 @@ app.post("/api/action", async (req, res) => {
     }
   });
 
+  app.get('/api/delhivery/proxy-pdf', async (req, res) => {
+    try {
+      const url = req.query.url as string;
+      if (!url) return res.status(400).send('Missing url parameter');
+
+      const response = await fetch(url);
+      if (!response.ok) {
+        return res.status(response.status).send(`Failed to fetch remote PDF: ${response.statusText}`);
+      }
+
+      const arrayBuffer = await response.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+      return res.send(buffer);
+    } catch (e: any) {
+      res.status(500).send(e.message);
+    }
+  });
+
   app.get('/api/delhivery/label/:awb.pdf', async (req, res) => {
     try {
       const dbSettings = await db.select().from(settings).where(eq(settings.id, "default")).limit(1);
@@ -1053,18 +1075,27 @@ app.post("/api/action", async (req, res) => {
           if (!link) return res.status(404).send('PDF not found');
           
           if (link.startsWith('http')) {
-              return res.redirect(link);
+              // Fetch remote S3 link server-side to avoid CORS issues in browser
+              const pdfRes = await fetch(link);
+              if (!pdfRes.ok) throw new Error(`Failed to fetch PDF from storage: ${pdfRes.statusText}`);
+              const arrayBuffer = await pdfRes.arrayBuffer();
+              const buffer = Buffer.from(arrayBuffer);
+              res.setHeader('Content-Type', 'application/pdf');
+              res.setHeader('Content-Disposition', `inline; filename="${awb}.pdf"`);
+              res.setHeader('Access-Control-Allow-Origin', '*');
+              return res.send(buffer);
           } else {
               // It's a base64 string (usually starts with JVBER)
               const base64Data = link.replace(/^data:application\/pdf;base64,/, '');
               const buffer = Buffer.from(base64Data, 'base64');
               res.setHeader('Content-Type', 'application/pdf');
               res.setHeader('Content-Disposition', `inline; filename="${awb}.pdf"`);
+              res.setHeader('Access-Control-Allow-Origin', '*');
               return res.send(buffer);
           }
       }
       res.status(404).send('Label not found');
-    } catch (e) {
+    } catch (e: any) {
       res.status(500).send(e.message);
     }
   });

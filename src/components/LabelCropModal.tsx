@@ -58,24 +58,37 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
     }
   }, [isOpen, initialUrl, initialAwb]);
 
+  // Resolve any external or S3 URLs through the server-side proxy to prevent CORS failures
+  const getProxiedUrl = (url: string) => {
+    if (!url) return url;
+    const trimmed = url.trim();
+    if (trimmed.startsWith('data:') || trimmed.startsWith('blob:')) return trimmed;
+    if (trimmed.startsWith('/')) return trimmed;
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+      if (typeof window !== 'undefined' && trimmed.startsWith(window.location.origin)) {
+        return trimmed;
+      }
+      return `/api/delhivery/proxy-pdf?url=${encodeURIComponent(trimmed)}`;
+    }
+    return trimmed;
+  };
+
   const fetchLabelByAwb = async (awb: string) => {
     if (!awb.trim()) return;
+    const cleanAwb = awb.trim();
+
+    // If user pasted a URL into the AWB box, handle it gracefully
+    if (cleanAwb.startsWith('http://') || cleanAwb.startsWith('https://')) {
+      setLabelUrl(cleanAwb);
+      return loadAndProcessPdf(cleanAwb);
+    }
+
     setIsLoading(true);
     setError(null);
     setStatusMsg("Fetching label from Delhivery...");
     try {
-      // First try to get the direct packing slip URL
-      const res = await fetch(`/api/delhivery/label-url/${encodeURIComponent(awb.trim())}`);
-      if (res.ok) {
-        const data = await res.json();
-        if (data.url) {
-          setLabelUrl(data.url);
-          await loadAndProcessPdf(data.url);
-          return;
-        }
-      }
-      // Fallback: load proxy PDF endpoint
-      const proxyUrl = `/api/delhivery/label/${encodeURIComponent(awb.trim())}.pdf`;
+      // Use the server proxy endpoint which streams binary PDF buffer with CORS headers
+      const proxyUrl = `/api/delhivery/label/${encodeURIComponent(cleanAwb)}.pdf`;
       setLabelUrl(proxyUrl);
       await loadAndProcessPdf(proxyUrl);
     } catch (e: any) {
@@ -105,10 +118,35 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
   const loadAndProcessPdf = async (urlOrData: string | ArrayBuffer) => {
     setIsLoading(true);
     setError(null);
-    setStatusMsg("Rendering and auto-cropping label...");
+    setStatusMsg("Loading and processing label...");
     try {
       const pdfjs = await ensurePdfJsLoaded();
-      const loadingTask = pdfjs.getDocument(urlOrData);
+
+      let docSource: any;
+      if (typeof urlOrData === 'string') {
+        const trimmed = urlOrData.trim();
+
+        // If user typed an AWB number directly into the URL input box
+        if (/^\d{8,16}$/.test(trimmed)) {
+          setAwbInput(trimmed);
+          return fetchLabelByAwb(trimmed);
+        }
+
+        const finalUrl = getProxiedUrl(trimmed);
+        setStatusMsg("Fetching PDF data from server...");
+        const res = await fetch(finalUrl);
+        if (!res.ok) {
+          const errText = await res.text().catch(() => '');
+          throw new Error(`Server returned ${res.status}: ${errText || res.statusText}`);
+        }
+        const arrayBuffer = await res.arrayBuffer();
+        docSource = { data: new Uint8Array(arrayBuffer) };
+      } else {
+        docSource = { data: new Uint8Array(urlOrData) };
+      }
+
+      setStatusMsg("Rendering label and removing blank margins...");
+      const loadingTask = pdfjs.getDocument(docSource);
       const pdf = await loadingTask.promise;
       const page = await pdf.getPage(1);
 
