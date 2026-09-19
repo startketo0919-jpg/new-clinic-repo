@@ -1053,7 +1053,7 @@ app.post("/api/action", async (req, res) => {
     }
   });
 
-  app.get('/api/delhivery/label/:awb.pdf', async (req, res) => {
+  const handleDelhiveryLabelPdf = async (req: any, res: any) => {
     try {
       const dbSettings = await db.select().from(settings).where(eq(settings.id, "default")).limit(1);
       const s = dbSettings[0];
@@ -1098,7 +1098,11 @@ app.post("/api/action", async (req, res) => {
     } catch (e: any) {
       res.status(500).send(e.message);
     }
-  });
+  };
+
+  app.get('/api/delhivery/label-pdf/:awb', handleDelhiveryLabelPdf);
+  app.get('/api/delhivery/label/:awb.pdf', handleDelhiveryLabelPdf);
+  app.get('/api/delhivery/label/:awb', handleDelhiveryLabelPdf);
 
   app.get('/api/delhivery/orders', async (req, res) => {
     try {

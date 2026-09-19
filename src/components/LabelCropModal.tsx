@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   X, Printer, Usb, Wifi, Crop, Download, RefreshCw, 
-  CheckCircle2, AlertCircle, FileText, ExternalLink, Sparkles 
+  CheckCircle2, AlertCircle, FileText, ExternalLink 
 } from 'lucide-react';
 
 interface LabelCropModalProps {
@@ -119,17 +119,16 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
     if ((window as any).PDFLib) {
       return (window as any).PDFLib;
     }
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
       const script = document.createElement('script');
-      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js';
+      script.src = 'https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js';
       script.onload = () => resolve((window as any).PDFLib);
       script.onerror = () => {
-        // Fallback to unpkg CDN if cdnjs is blocked
-        const fallback = document.createElement('script');
-        fallback.src = 'https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js';
-        fallback.onload = () => resolve((window as any).PDFLib);
-        fallback.onerror = () => reject(new Error("Failed to load PDF vector manipulation engine"));
-        document.head.appendChild(fallback);
+        const fb = document.createElement('script');
+        fb.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js';
+        fb.onload = () => resolve((window as any).PDFLib);
+        fb.onerror = () => resolve(null);
+        document.head.appendChild(fb);
       };
       document.head.appendChild(script);
     });
@@ -164,7 +163,19 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
     setError(null);
     setStatusMsg("Fetching label from Delhivery...");
     try {
-      const proxyUrl = `/api/delhivery/label/${encodeURIComponent(cleanAwb)}.pdf`;
+      // 1. Try to get direct packing slip URL from Delhivery API
+      const res = await fetch(`/api/delhivery/label-url/${encodeURIComponent(cleanAwb)}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.url) {
+          setLabelUrl(data.url);
+          await loadAndProcessPdf(data.url);
+          return;
+        }
+      }
+
+      // 2. Fallback: try proxy binary endpoint
+      const proxyUrl = `/api/delhivery/label-pdf/${encodeURIComponent(cleanAwb)}`;
       setLabelUrl(proxyUrl);
       await loadAndProcessPdf(proxyUrl);
     } catch (e: any) {
@@ -246,8 +257,15 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
     targetSize: 'zero-margin' | '75x110' | '75x125' | '75x130'
   ) => {
     try {
-      const { PDFDocument } = await ensurePdfLibLoaded();
-      const pdfDoc = await PDFDocument.load(rawBytes);
+      const PDFLib = await ensurePdfLibLoaded();
+      if (!PDFLib || !PDFLib.PDFDocument) {
+        console.warn("PDFLib not available, using high-res canvas mode");
+        return;
+      }
+      const { PDFDocument } = PDFLib;
+
+      // Slice arrayBuffer to prevent detached buffer errors
+      const pdfDoc = await PDFDocument.load(rawBytes.slice(0));
 
       // Strip any extra pages (e.g. Delhivery terms) so thermal roll prints only 1 label
       while (pdfDoc.getPageCount() > 1) {
@@ -302,7 +320,7 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
       setVectorPdfBytes(savedBytes);
       setVectorPdfBlobUrl(blobUrl);
     } catch (e: any) {
-      console.error("Vector PDF generation error:", e);
+      console.warn("Vector PDF generation error (fallback to high-res preview):", e);
     }
   };
 
@@ -352,7 +370,9 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
       setRawPdfBuffer(arrayBuffer);
 
       setStatusMsg("Scanning label layout and blank margins...");
-      const loadingTask = pdfjs.getDocument({ data: new Uint8Array(arrayBuffer) });
+      // IMPORTANT: Pass a cloned slice of the buffer to pdfjs, because pdfjs Web Worker detaches the buffer!
+      const pdfjsData = new Uint8Array(arrayBuffer.slice(0));
+      const loadingTask = pdfjs.getDocument({ data: pdfjsData });
       const pdf = await loadingTask.promise;
       const page = await pdf.getPage(1);
 
@@ -371,7 +391,7 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
 
       await page.render({ canvasContext: ctx, viewport }).promise;
 
-      // Detect ink bounding box in canvas pixels
+      // Detect ink bounding box in canvas pixels with STRICT ZERO MARGIN
       const box = getCanvasWhitespaceBox(canvas);
       
       // Convert canvas pixel coordinates to true PDF point coordinates
@@ -385,9 +405,10 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
       };
       setDetectedPdfBounds(bounds);
 
-      // Create cropped PNG for ESC/POS raster and fallback preview
+      // Create cropped PNG for ESC/POS raster and preview
       const croppedCanvas = cropWhitespace(canvas, box);
-      setCroppedDataUrl(croppedCanvas.toDataURL('image/png'));
+      const dataUrl = croppedCanvas.toDataURL('image/png');
+      setCroppedDataUrl(dataUrl);
       setCropDimensions({ width: croppedCanvas.width, height: croppedCanvas.height });
 
       setStatusMsg("Building lossless Vector PDF (Text Selectable)...");
@@ -418,45 +439,63 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
    * Primary Print Action: Prints the native Vector PDF directly with text selection and sharp barcodes
    */
   const handlePrintVectorPdf = () => {
-    if (!vectorPdfBlobUrl) return;
+    if (vectorPdfBlobUrl) {
+      let iframe = document.getElementById('vector-pdf-print-frame') as HTMLIFrameElement | null;
+      if (iframe) {
+        iframe.remove();
+      }
 
-    let iframe = document.getElementById('vector-pdf-print-frame') as HTMLIFrameElement | null;
-    if (iframe) {
-      iframe.remove();
+      iframe = document.createElement('iframe');
+      iframe.id = 'vector-pdf-print-frame';
+      iframe.style.position = 'fixed';
+      iframe.style.right = '0';
+      iframe.style.bottom = '0';
+      iframe.style.width = '0';
+      iframe.style.height = '0';
+      iframe.style.border = '0';
+      iframe.src = vectorPdfBlobUrl;
+      document.body.appendChild(iframe);
+
+      iframe.onload = () => {
+        setTimeout(() => {
+          try {
+            iframe?.contentWindow?.focus();
+            iframe?.contentWindow?.print();
+          } catch (err) {
+            console.warn("Iframe print blocked, opening tab:", err);
+            window.open(vectorPdfBlobUrl, '_blank');
+          }
+        }, 400);
+      };
+    } else if (croppedDataUrl) {
+      // Fallback: print via image window
+      const printWin = window.open('', '_blank', 'width=450,height=650');
+      if (printWin) {
+        printWin.document.write(`
+          <html>
+            <head><style>@page{margin:0;size:auto;} body{margin:0;display:flex;align-items:center;justify-content:center;} img{max-width:100%;height:auto;}</style></head>
+            <body><img src="${croppedDataUrl}" onload="window.print(); window.close();" /></body>
+          </html>
+        `);
+        printWin.document.close();
+      }
     }
-
-    iframe = document.createElement('iframe');
-    iframe.id = 'vector-pdf-print-frame';
-    iframe.style.position = 'fixed';
-    iframe.style.right = '0';
-    iframe.style.bottom = '0';
-    iframe.style.width = '0';
-    iframe.style.height = '0';
-    iframe.style.border = '0';
-    iframe.src = vectorPdfBlobUrl;
-    document.body.appendChild(iframe);
-
-    iframe.onload = () => {
-      setTimeout(() => {
-        try {
-          iframe?.contentWindow?.focus();
-          iframe?.contentWindow?.print();
-        } catch (err) {
-          console.warn("Iframe print blocked or unsupported, opening in print tab:", err);
-          window.open(vectorPdfBlobUrl, '_blank');
-        }
-      }, 400);
-    };
   };
 
   /**
    * Open Vector PDF in a new tab: User can select text, copy details, zoom, and print with Ctrl+P
    */
   const handleOpenVectorPdf = () => {
-    if (!vectorPdfBlobUrl) return;
-    const win = window.open(vectorPdfBlobUrl, '_blank');
-    if (!win) {
-      alert("Please allow popups to view and print the vector PDF.");
+    if (vectorPdfBlobUrl) {
+      const win = window.open(vectorPdfBlobUrl, '_blank');
+      if (!win) {
+        alert("Please allow popups to view and print the vector PDF.");
+      }
+    } else if (croppedDataUrl) {
+      const win = window.open('', '_blank');
+      if (win) {
+        win.document.write(`<img src="${croppedDataUrl}" style="max-width:100%;height:auto;" />`);
+      }
     }
   };
 
@@ -715,7 +754,7 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
                   <div className="w-8 h-8 border-3 border-teal-600 border-t-transparent rounded-full animate-spin mx-auto" />
                   <p className="text-xs text-slate-600 font-medium">Generating lossless vector label...</p>
                 </div>
-              ) : vectorPdfBlobUrl ? (
+              ) : (vectorPdfBlobUrl || croppedDataUrl) ? (
                 <div className="flex flex-col h-full space-y-2.5">
                   
                   {/* Top Quality Banner */}
@@ -726,25 +765,27 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
                         <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
                       </span>
                       <span className="text-xs font-bold text-emerald-800">
-                        Vector PDF &bull; Text Selectable
+                        {vectorPdfBlobUrl ? "Vector PDF • Text Selectable" : "Cropped Label Ready"}
                       </span>
                     </div>
                     
                     <div className="flex items-center gap-2">
-                      <div className="flex bg-slate-100 p-0.5 rounded-lg text-[10px] font-semibold">
-                        <button
-                          onClick={() => setPreviewMode('vector')}
-                          className={`px-2 py-0.5 rounded-md transition-all cursor-pointer ${previewMode === 'vector' ? 'bg-white text-teal-800 shadow-xs font-bold' : 'text-slate-500 hover:text-slate-800'}`}
-                        >
-                          Vector PDF
-                        </button>
-                        <button
-                          onClick={() => setPreviewMode('image')}
-                          className={`px-2 py-0.5 rounded-md transition-all cursor-pointer ${previewMode === 'image' ? 'bg-white text-teal-800 shadow-xs font-bold' : 'text-slate-500 hover:text-slate-800'}`}
-                        >
-                          Raster Image
-                        </button>
-                      </div>
+                      {vectorPdfBlobUrl && (
+                        <div className="flex bg-slate-100 p-0.5 rounded-lg text-[10px] font-semibold">
+                          <button
+                            onClick={() => setPreviewMode('vector')}
+                            className={`px-2 py-0.5 rounded-md transition-all cursor-pointer ${previewMode === 'vector' ? 'bg-white text-teal-800 shadow-xs font-bold' : 'text-slate-500 hover:text-slate-800'}`}
+                          >
+                            Vector PDF
+                          </button>
+                          <button
+                            onClick={() => setPreviewMode('image')}
+                            className={`px-2 py-0.5 rounded-md transition-all cursor-pointer ${previewMode === 'image' ? 'bg-white text-teal-800 shadow-xs font-bold' : 'text-slate-500 hover:text-slate-800'}`}
+                          >
+                            Image
+                          </button>
+                        </div>
+                      )}
                       <button
                         onClick={handleOpenVectorPdf}
                         title="Open in new tab to select, zoom & print"
@@ -757,7 +798,7 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
 
                   {/* Main Preview Container */}
                   <div className="flex-1 w-full bg-white rounded-2xl shadow-sm border border-slate-300 overflow-hidden flex items-center justify-center min-h-[400px]">
-                    {previewMode === 'vector' ? (
+                    {previewMode === 'vector' && vectorPdfBlobUrl ? (
                       <iframe 
                         src={`${vectorPdfBlobUrl}#toolbar=0&navpanes=0`} 
                         className="w-full h-full min-h-[400px] border-0 rounded-2xl bg-white"
@@ -825,7 +866,7 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
                 {/* 1. Print Vector PDF (Highest Quality) - PRIMARY */}
                 <button
                   onClick={handlePrintVectorPdf}
-                  disabled={!vectorPdfBlobUrl || isPrinting}
+                  disabled={(!vectorPdfBlobUrl && !croppedDataUrl) || isPrinting}
                   className="w-full py-3 px-4 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold shadow-md hover:shadow-lg flex items-center justify-center gap-2 transition-all disabled:opacity-50 cursor-pointer"
                 >
                   <Printer className="w-4 h-4" />
@@ -835,7 +876,7 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
                 {/* 2. Open Vector PDF in Tab (Select Text / Fullscreen Print) */}
                 <button
                   onClick={handleOpenVectorPdf}
-                  disabled={!vectorPdfBlobUrl}
+                  disabled={!vectorPdfBlobUrl && !croppedDataUrl}
                   className="w-full py-2.5 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-sm flex items-center justify-center gap-2 transition-all disabled:opacity-50 cursor-pointer"
                 >
                   <ExternalLink className="w-4 h-4 text-teal-400" />
