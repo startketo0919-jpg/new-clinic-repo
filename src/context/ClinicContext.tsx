@@ -33,6 +33,8 @@ interface ClinicContextType {
   updateTemplates: (templates: WhatsAppTemplate[]) => Promise<void>;
   sendWhatsAppMessage: (phone: string, content: string, templateName?: string, templateLanguage?: string, templateComponents?: any[]) => Promise<void>;
   resetDatabase: (adminPass: string) => boolean;
+  markShipmentStatus: (id: string, status: 'Pending' | 'Completed') => Promise<void>;
+  deleteShipment: (id: string) => Promise<void>;
   nextSequence: number;
 }
 
@@ -44,6 +46,7 @@ export function ClinicProvider({ children }: { children: React.ReactNode }) {
     patientRegistry: INITIAL_REGISTRY,
     users: INITIAL_USERS,
     appointments: [],
+    shipments: [],
     messages: [],
     templates: [],
     settings: INITIAL_SETTINGS,
@@ -62,6 +65,7 @@ export function ClinicProvider({ children }: { children: React.ReactNode }) {
           patients: data.patients || [],
           patientRegistry: data.patientRegistry || [],
           appointments: data.appointments || [],
+          shipments: data.shipments || [],
           messages: data.messages || [],
           users: data.users && data.users.length > 0 ? data.users : INITIAL_USERS,
           settings: data.settings || INITIAL_SETTINGS,
@@ -618,13 +622,41 @@ export function ClinicProvider({ children }: { children: React.ReactNode }) {
     return false;
   };
 
+  const markShipmentStatus = async (id: string, status: 'Pending' | 'Completed') => {
+    setState(prev => ({
+      ...prev,
+      shipments: prev.shipments.map(s => s.id === id ? { ...s, status, completedAt: status === 'Completed' ? Date.now() : undefined } : s)
+    }));
+    try {
+      await fetch(`/api/shipments/${id}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status })
+      });
+    } catch (e) {
+      console.error("Failed to update shipment status", e);
+    }
+  };
+
+  const deleteShipment = async (id: string) => {
+    setState(prev => ({
+      ...prev,
+      shipments: prev.shipments.filter(s => s.id !== id)
+    }));
+    try {
+      await fetch(`/api/shipments/${id}`, { method: 'DELETE' });
+    } catch (e) {
+      console.error("Failed to delete shipment", e);
+    }
+  };
+
   return (
     <ClinicContext.Provider value={{ 
       state, addPatient, updatePatientStatus, reorderWaitingQueue, deletePatientRecord,
       updateFollowUpDate, addUser, deleteUser, updateUserEmail, updateUserPassword, addAppointment,
       cancelAppointment, updateSettings,
-    updateTemplates,
-    resetDatabase, nextSequence, sendWhatsAppMessage, approveAppointment 
+      updateTemplates,
+      resetDatabase, markShipmentStatus, deleteShipment, nextSequence, sendWhatsAppMessage, approveAppointment 
     }}>
       {children}
     </ClinicContext.Provider>
