@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Package, Truck, FileText, Search, Plus, Trash2, CheckCircle2, History as HistoryIcon, Download, XCircle, Copy, AlertCircle, Calendar, Clock, ChevronDown, ChevronUp, RefreshCw, MessageSquare, Phone, MapPin, ExternalLink, Send } from 'lucide-react';
+import { Package, Truck, FileText, Search, Plus, Trash2, CheckCircle2, History as HistoryIcon, Download, XCircle, Copy, AlertCircle, Calendar, Clock, ChevronDown, ChevronUp, RefreshCw, MessageSquare, Phone, MapPin, ExternalLink, Send, Crop, Printer } from 'lucide-react';
 import { useClinic } from '../context/ClinicContext';
+import LabelCropModal from './LabelCropModal';
 
 interface DelhiveryCourierProps {
   prefillData?: {
@@ -32,6 +33,17 @@ export default function DelhiveryCourier({ prefillData }: DelhiveryCourierProps 
       setActiveTab('new_order');
     }
   }, [prefillData]);
+
+  // Label Cropper & Thermal Print Modal State
+  const [cropModalOpen, setCropModalOpen] = useState(false);
+  const [cropModalAwb, setCropModalAwb] = useState<string | undefined>(undefined);
+  const [cropModalUrl, setCropModalUrl] = useState<string | undefined>(undefined);
+
+  const openCropModal = (awb?: string, url?: string) => {
+    setCropModalAwb(awb);
+    setCropModalUrl(url);
+    setCropModalOpen(true);
+  };
   const [consigneeCity, setConsigneeCity] = useState('');
   const [consigneeState, setConsigneeState] = useState('');
   const [packageType, setPackageType] = useState<'Box' | 'Flyer'>('Box');
@@ -367,11 +379,22 @@ export default function DelhiveryCourier({ prefillData }: DelhiveryCourierProps 
           Delhivery Courier Integration
         </h2>
         
-        <div className="flex bg-slate-100 p-1 rounded-xl">
-          <button onClick={() => setActiveTab('new_order')} className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${activeTab === 'new_order' ? 'bg-white shadow-sm text-indigo-700' : 'text-slate-600 hover:text-slate-900'}`}>New Order</button>
-          <button onClick={() => setActiveTab('pickup')} className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${activeTab === 'pickup' ? 'bg-white shadow-sm text-indigo-700' : 'text-slate-600 hover:text-slate-900'}`}>Schedule Pickup</button>
-          <button onClick={() => setActiveTab('manage')} className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${activeTab === 'manage' ? 'bg-white shadow-sm text-indigo-700' : 'text-slate-600 hover:text-slate-900'}`}>Track / Cancel / PDF</button>
-          <button onClick={() => setActiveTab('history')} className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${activeTab === 'history' ? 'bg-white shadow-sm text-indigo-700' : 'text-slate-600 hover:text-slate-900'}`}>History</button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => openCropModal()}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-teal-50 text-teal-700 border border-teal-200 hover:bg-teal-600 hover:text-white text-xs font-semibold transition-all shadow-2xs"
+            title="Auto-crop and print any label URL or PDF"
+          >
+            <Crop className="w-4 h-4" />
+            <span>Crop & Print Label</span>
+          </button>
+          
+          <div className="flex bg-slate-100 p-1 rounded-xl">
+            <button onClick={() => setActiveTab('new_order')} className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${activeTab === 'new_order' ? 'bg-white shadow-sm text-indigo-700' : 'text-slate-600 hover:text-slate-900'}`}>New Order</button>
+            <button onClick={() => setActiveTab('pickup')} className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${activeTab === 'pickup' ? 'bg-white shadow-sm text-indigo-700' : 'text-slate-600 hover:text-slate-900'}`}>Schedule Pickup</button>
+            <button onClick={() => setActiveTab('manage')} className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${activeTab === 'manage' ? 'bg-white shadow-sm text-indigo-700' : 'text-slate-600 hover:text-slate-900'}`}>Track / Cancel / PDF</button>
+            <button onClick={() => setActiveTab('history')} className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${activeTab === 'history' ? 'bg-white shadow-sm text-indigo-700' : 'text-slate-600 hover:text-slate-900'}`}>History</button>
+          </div>
         </div>
       </div>
 
@@ -390,7 +413,14 @@ export default function DelhiveryCourier({ prefillData }: DelhiveryCourierProps 
                 <div className="text-3xl font-bold text-indigo-700 tracking-wider font-mono">{createdAwb}</div>
               </div>
               
-              <div className="flex gap-3 justify-center">
+              <div className="flex flex-wrap gap-3 justify-center">
+                <button
+                  onClick={() => openCropModal(createdAwb)}
+                  className="flex items-center justify-center gap-2 px-5 py-3 bg-teal-600 text-white font-semibold rounded-xl hover:bg-teal-700 transition-colors shadow-sm"
+                >
+                  <Printer size={18} />
+                  Crop & Print Label
+                </button>
                 <button onClick={async () => {
                   try {
                     const res = await fetch(`/api/delhivery/label-url/${createdAwb}`);
@@ -404,8 +434,8 @@ export default function DelhiveryCourier({ prefillData }: DelhiveryCourierProps 
                   } catch(e) {
                       alert('Error fetching label URL');
                   }
-                }} className="flex items-center justify-center gap-2 px-6 py-3 bg-indigo-600 text-white font-semibold rounded-xl hover:bg-indigo-700 transition-colors shadow-sm">
-                  <Copy size={18} />
+                }} className="flex items-center justify-center gap-2 px-4 py-3 bg-indigo-600 text-white font-semibold rounded-xl hover:bg-indigo-700 transition-colors shadow-sm text-xs">
+                  <Copy size={16} />
                   Copy URL
                 </button>
                 <button onClick={async () => {
@@ -427,9 +457,9 @@ export default function DelhiveryCourier({ prefillData }: DelhiveryCourierProps 
                   } catch(e) {
                       alert('Error fetching label PDF');
                   }
-                }} className="flex items-center justify-center gap-2 px-6 py-3 bg-emerald-600 text-white font-semibold rounded-xl hover:bg-emerald-700 transition-colors shadow-sm">
-                  <Download size={18} />
-                  Download PDF
+                }} className="flex items-center justify-center gap-2 px-4 py-3 bg-slate-800 text-white font-semibold rounded-xl hover:bg-slate-900 transition-colors shadow-sm text-xs">
+                  <Download size={16} />
+                  PDF
                 </button>
                 <button onClick={() => setCreatedAwb(null)} className="px-6 py-3 bg-white text-slate-700 border border-slate-300 font-semibold rounded-xl hover:bg-slate-50 transition-colors">
                   Create Another
@@ -940,36 +970,48 @@ export default function DelhiveryCourier({ prefillData }: DelhiveryCourierProps 
                 </datalist>
               </div>
 
-               <div className="grid grid-cols-3 gap-3">
-                 <button 
-                   type="button"
-                   onClick={() => handleManage('track')} 
-                   disabled={isTrackLoading}
-                   className="flex flex-col items-center justify-center p-4 bg-white border border-slate-200 rounded-xl hover:border-indigo-500 hover:text-indigo-600 transition-all font-semibold text-slate-700 shadow-2xs group"
-                 >
-                   <Search className={`w-5 h-5 mb-1.5 text-indigo-600 group-hover:scale-110 transition-transform ${isTrackLoading ? 'animate-spin' : ''}`} />
-                   <span className="text-sm">Track In-App</span>
-                   <span className="text-[11px] text-slate-400 font-normal">Delhivery API</span>
-                 </button>
-                 <button 
-                   type="button"
-                   onClick={() => handleManage('pdf')} 
-                   className="flex flex-col items-center justify-center p-4 bg-white border border-slate-200 rounded-xl hover:border-emerald-500 hover:text-emerald-600 transition-all font-semibold text-slate-700 shadow-2xs group"
-                 >
-                   <FileText className="w-5 h-5 mb-1.5 text-emerald-600 group-hover:scale-110 transition-transform" />
-                   <span className="text-sm">Print Label (PDF)</span>
-                   <span className="text-[11px] text-slate-400 font-normal">Thermal / Packing Slip</span>
-                 </button>
-                 <button 
-                   type="button"
-                   onClick={() => handleManage('cancel')} 
-                   className="flex flex-col items-center justify-center p-4 bg-white border border-slate-200 rounded-xl hover:border-rose-500 hover:text-rose-600 transition-all font-semibold text-slate-700 shadow-2xs group"
-                 >
-                   <XCircle className="w-5 h-5 mb-1.5 text-rose-500 group-hover:scale-110 transition-transform" />
-                   <span className="text-sm">Cancel Order</span>
-                   <span className="text-[11px] text-slate-400 font-normal">Void AWB</span>
-                 </button>
-               </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <button 
+                    type="button"
+                    onClick={() => handleManage('track')} 
+                    disabled={isTrackLoading}
+                    className="flex flex-col items-center justify-center p-4 bg-white border border-slate-200 rounded-xl hover:border-indigo-500 hover:text-indigo-600 transition-all font-semibold text-slate-700 shadow-2xs group"
+                  >
+                    <Search className={`w-5 h-5 mb-1.5 text-indigo-600 group-hover:scale-110 transition-transform ${isTrackLoading ? 'animate-spin' : ''}`} />
+                    <span className="text-sm">Track In-App</span>
+                    <span className="text-[11px] text-slate-400 font-normal">Delhivery API</span>
+                  </button>
+                  <button 
+                    type="button"
+                    onClick={() => {
+                      if (!manageAwb) return alert("Enter AWB first");
+                      openCropModal(manageAwb);
+                    }} 
+                    className="flex flex-col items-center justify-center p-4 bg-white border border-slate-200 rounded-xl hover:border-teal-500 hover:text-teal-600 transition-all font-semibold text-slate-700 shadow-2xs group"
+                  >
+                    <Crop className="w-5 h-5 mb-1.5 text-teal-600 group-hover:scale-110 transition-transform" />
+                    <span className="text-sm">Crop & Print</span>
+                    <span className="text-[11px] text-slate-400 font-normal">Auto-Crop 75mm</span>
+                  </button>
+                  <button 
+                    type="button"
+                    onClick={() => handleManage('pdf')} 
+                    className="flex flex-col items-center justify-center p-4 bg-white border border-slate-200 rounded-xl hover:border-emerald-500 hover:text-emerald-600 transition-all font-semibold text-slate-700 shadow-2xs group"
+                  >
+                    <FileText className="w-5 h-5 mb-1.5 text-emerald-600 group-hover:scale-110 transition-transform" />
+                    <span className="text-sm">Print PDF</span>
+                    <span className="text-[11px] text-slate-400 font-normal">Full Packing Slip</span>
+                  </button>
+                  <button 
+                    type="button"
+                    onClick={() => handleManage('cancel')} 
+                    className="flex flex-col items-center justify-center p-4 bg-white border border-slate-200 rounded-xl hover:border-rose-500 hover:text-rose-600 transition-all font-semibold text-slate-700 shadow-2xs group"
+                  >
+                    <XCircle className="w-5 h-5 mb-1.5 text-rose-500 group-hover:scale-110 transition-transform" />
+                    <span className="text-sm">Cancel Order</span>
+                    <span className="text-[11px] text-slate-400 font-normal">Void AWB</span>
+                  </button>
+                </div>
                
                {manageResult && (
                  <div className="mt-5 p-3.5 bg-white rounded-xl border border-slate-200 text-xs font-medium text-slate-700 flex items-center justify-between">
@@ -1221,6 +1263,17 @@ export default function DelhiveryCourier({ prefillData }: DelhiveryCourierProps 
                                <Search className="w-3.5 h-3.5" />
                                <span>Track In-App</span>
                              </button>
+
+                             {/* Print / Crop Label Button */}
+                             <button 
+                               type="button"
+                               onClick={() => openCropModal(order.awb)}
+                               className="inline-flex items-center gap-1.5 text-teal-700 hover:text-white hover:bg-teal-600 font-semibold text-xs border border-teal-200 px-3 py-1.5 rounded-lg bg-teal-50 transition-all shadow-2xs"
+                               title="Auto-crop and print thermal label"
+                             >
+                               <Printer className="w-3.5 h-3.5" />
+                               <span>Print Label</span>
+                             </button>
                            </div>
                          </td>
                        </tr>
@@ -1239,6 +1292,13 @@ export default function DelhiveryCourier({ prefillData }: DelhiveryCourierProps 
            </div>
         )}
       </div>
+
+      <LabelCropModal
+        isOpen={cropModalOpen}
+        onClose={() => setCropModalOpen(false)}
+        initialAwb={cropModalAwb}
+        initialUrl={cropModalUrl}
+      />
     </div>
   );
 }

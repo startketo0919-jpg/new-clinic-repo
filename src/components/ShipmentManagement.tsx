@@ -4,8 +4,9 @@ import { PatientShipment } from '../types';
 import { 
   Package, CheckCircle2, Clock, Phone, Mail, MapPin, Copy, Check, 
   Search, ExternalLink, MessageSquare, Trash2, ArrowRight, Truck, 
-  Share2, AlertCircle, RefreshCw 
+  Share2, AlertCircle, RefreshCw, Crop, Printer 
 } from 'lucide-react';
+import LabelCropModal from './LabelCropModal';
 
 interface ShipmentManagementProps {
   onAutofillDelhivery?: (data: {
@@ -22,6 +23,7 @@ export default function ShipmentManagement({ onAutofillDelhivery }: ShipmentMana
   const [filterStatus, setFilterStatus] = useState<'All' | 'Pending' | 'Completed'>('All');
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedAddressId, setCopiedAddressId] = useState<string | null>(null);
+  const [cropModalOpen, setCropModalOpen] = useState(false);
 
   const shipments = state.shipments || [];
 
@@ -75,8 +77,17 @@ export default function ShipmentManagement({ onAutofillDelhivery }: ShipmentMana
           </p>
         </div>
 
-        {/* Share buttons */}
+        {/* Share & Thermal Print buttons */}
         <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => setCropModalOpen(true)}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-teal-300 border border-teal-500/30 text-xs font-semibold shadow transition-colors"
+            title="Auto-crop and thermal print any packing slip"
+          >
+            <Printer className="w-4 h-4 text-teal-400" />
+            <span>Crop & Print Label</span>
+          </button>
+
           <button
             onClick={handleCopyLink}
             className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-semibold shadow transition-colors"
@@ -339,6 +350,10 @@ export default function ShipmentManagement({ onAutofillDelhivery }: ShipmentMana
         </div>
       )}
 
+      <LabelCropModal
+        isOpen={cropModalOpen}
+        onClose={() => setCropModalOpen(false)}
+      />
     </div>
   );
 }
