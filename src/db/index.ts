@@ -1,38 +1,42 @@
-import { drizzle } from 'drizzle-orm/mysql2';
-import mysql from 'mysql2/promise';
+import { drizzle } from 'drizzle-orm/node-postgres';
+import pg from 'pg';
 import * as schema from './schema.js';
 
+const { Pool } = pg;
+
 declare global {
-  var _mysqlPool: mysql.Pool | undefined;
+  var _postgresPool: pg.Pool | undefined;
 }
 
 export const createPool = () => {
-  if (!global._mysqlPool) {
+  if (!global._postgresPool) {
     const connectionString = process.env.DATABASE_URL;
 
-    if (connectionString && connectionString.startsWith('mysql')) {
-      global._mysqlPool = mysql.createPool({
-        uri: connectionString,
-        waitForConnections: true,
-        connectionLimit: 10,
-        queueLimit: 0,
+    if (connectionString) {
+      global._postgresPool = new Pool({
+        connectionString,
+        ssl: connectionString.includes('localhost') ? false : { rejectUnauthorized: false },
+        max: 10,
+        connectionTimeoutMillis: 15000,
       });
     } else {
-      global._mysqlPool = mysql.createPool({
-        host: process.env.MYSQL_HOST || process.env.SQL_HOST || '127.0.0.1',
-        port: parseInt(process.env.MYSQL_PORT || process.env.SQL_PORT || '3306', 10),
-        user: process.env.MYSQL_USER || process.env.SQL_USER || 'u670657683_clinic_user',
-        password: process.env.MYSQL_PASSWORD || process.env.SQL_PASSWORD || 'Suyash@0919',
-        database: process.env.MYSQL_DATABASE || process.env.SQL_DB_NAME || 'u670657683_clinic_app',
-        waitForConnections: true,
-        connectionLimit: 10,
-        queueLimit: 0,
-        connectTimeout: 15000,
+      global._postgresPool = new Pool({
+        host: process.env.SQL_HOST,
+        user: process.env.SQL_USER,
+        password: process.env.SQL_PASSWORD,
+        database: process.env.SQL_DB_NAME,
+        ssl: process.env.SQL_HOST && !process.env.SQL_HOST.includes('localhost') ? { rejectUnauthorized: false } : false,
+        max: 10,
+        connectionTimeoutMillis: 15000,
       });
     }
+
+    global._postgresPool.on('error', (err) => {
+      console.error('Unexpected error on idle SQL pool client:', err);
+    });
   }
-  return global._mysqlPool;
+  return global._postgresPool;
 };
 
 export const pool = createPool();
-export const db = drizzle(pool, { schema, mode: 'default' });
+export const db = drizzle(pool, { schema });
