@@ -55,12 +55,26 @@ export interface Appointment {
   date: string;
 }
 
+export interface PatientShipment {
+  id: string;
+  patientName: string;
+  phone: string;
+  email?: string;
+  address: string;
+  pincode: string;
+  notes?: string;
+  status: 'Pending' | 'Completed';
+  createdAt: number;
+  completedAt?: number;
+}
+
 export interface ClinicState {
   patients: Patient[];
   patientRegistry: PatientRecord[];
   users: User[];
   currentPatientId: string | null;
   appointments: Appointment[];
+  shipments: PatientShipment[];
   messages: WhatsAppMessage[];
   settings: {
     whatsappApiKey: string;
