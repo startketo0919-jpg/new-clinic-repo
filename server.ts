@@ -1,15 +1,25 @@
+import * as dotenv from "dotenv";
+dotenv.config();
+
 import express from "express";
 import nodemailer from "nodemailer";
 import path from "path";
 import cors from "cors";
 import { createServer as createViteServer } from "vite";
 import { db } from "./src/db/index.js";
+import { initDb } from "./src/db/init.js";
 import { liveQueue, patientRegistry, users, appointments, settings, whatsappMessages, whatsappTemplates, delhiveryOrders } from "./src/db/schema.js";
 import { eq, desc, asc, and } from "drizzle-orm";
 // We don't enforce requireAuth for all actions since patients self-checkin, but we should in production.
 import { requireAuth, AuthRequest } from "./src/middleware/auth.js";
 
 async function startServer() {
+  try {
+    await initDb();
+  } catch (err) {
+    console.error("Failed to auto-init database:", err);
+  }
+
   const app = express();
   const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
