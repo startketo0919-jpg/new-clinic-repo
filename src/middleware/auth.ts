@@ -1,28 +1,80 @@
 import { Request, Response, NextFunction } from 'express';
-import { adminAuth } from '../lib/firebase-admin.js';
-import { DecodedIdToken } from 'firebase-admin/auth';
+import { verifyAuthToken, TokenPayload } from '../db/auth-utils.js';
 
 export interface AuthRequest extends Request {
-  user?: DecodedIdToken;
+  user?: TokenPayload;
 }
 
-export const requireAuth = async (
+/**
+ * Enforces staff/doctor/admin authentication via Bearer token
+ */
+export const requireStaffAuth = (
   req: AuthRequest,
   res: Response,
   next: NextFunction
 ) => {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Unauthorized: Missing token' });
+    return res.status(401).json({ error: 'Unauthorized: Staff session required. Please log in.' });
   }
 
-  const token = authHeader.split('Bearer ')[1];
-  try {
-    const decodedToken = await adminAuth.verifyIdToken(token);
-    req.user = decodedToken;
-    next();
-  } catch (error) {
-    console.error('Error verifying Firebase ID token:', error);
-    return res.status(401).json({ error: 'Unauthorized: Invalid token' });
+  const token = authHeader.split('Bearer ')[1].trim();
+  const payload = verifyAuthToken(token);
+
+  if (!payload) {
+    return res.status(401).json({ error: 'Unauthorized: Session expired or invalid. Please log in again.' });
   }
+
+  req.user = payload;
+  next();
 };
+
+/**
+ * Enforces Superadmin privilege (role === 'admin')
+ */
+export const requireAdminAuth = (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction
+) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Unauthorized: Administrator session required.' });
+  }
+
+  const token = authHeader.split('Bearer ')[1].trim();
+  const payload = verifyAuthToken(token);
+
+  if (!payload) {
+    return res.status(401).json({ error: 'Unauthorized: Session expired or invalid. Please log in again.' });
+  }
+
+  if (payload.role !== 'admin') {
+    return res.status(403).json({ error: 'Forbidden: Administrator privilege required for this action.' });
+  }
+
+  req.user = payload;
+  next();
+};
+
+/**
+ * Optional authentication: Attaches user payload if valid token is present
+ */
+export const optionalAuth = (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction
+) => {
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.split('Bearer ')[1].trim();
+    const payload = verifyAuthToken(token);
+    if (payload) {
+      req.user = payload;
+    }
+  }
+  next();
+};
+
+// Default export alias
+export const requireAuth = requireStaffAuth;

@@ -92,11 +92,17 @@ export function ClinicProvider({ children }: { children: React.ReactNode }) {
 
   const dispatchAction = async (type: string, payload: any) => {
     try {
-      await fetch('/api/action', {
+      const res = await fetch('/api/action', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type, payload })
       });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        if (res.status === 401 || res.status === 403) {
+          console.warn(`[Security Notice] Action ${type} rejected by server: ${data.error || res.statusText}`);
+        }
+      }
       // SSE will trigger re-fetch on all connected clients including this one
     } catch (e) {
       console.error(`Failed to dispatch ${type}`, e);

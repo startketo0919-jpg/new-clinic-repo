@@ -36,8 +36,9 @@ export default function Login() {
     };
   }, [resendCountdown]);
 
-  const completeLogin = (user: any) => {
+  const completeLogin = (user: any, token?: string) => {
     sessionStorage.setItem('staffAuthenticated', 'true');
+    if (token) sessionStorage.setItem('staffAuthToken', token);
     sessionStorage.setItem('userRole', user.role || 'admin');
     sessionStorage.setItem('username', user.username || identifier);
     if (user.email) sessionStorage.setItem('userEmail', user.email);
@@ -64,7 +65,7 @@ export default function Login() {
       setLoading(false);
 
       if (res.ok && data.success) {
-        completeLogin(data.user);
+        completeLogin(data.user, data.token);
       } else {
         setError(data.error || 'Invalid email or password.');
       }
@@ -177,7 +178,7 @@ export default function Login() {
         (u.username && u.username.toLowerCase() === identifier.trim().toLowerCase())
       ) || { username: identifier || 'suyash', role: 'admin', email: userEmail };
 
-      completeLogin(user);
+      completeLogin(data.user || user, data.token);
     } catch (err: any) {
       setLoading(false);
       setError(err.message);

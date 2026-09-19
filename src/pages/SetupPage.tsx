@@ -38,6 +38,7 @@ export default function SetupPage() {
 
       if (res.ok && data.success) {
         sessionStorage.setItem('staffAuthenticated', 'true');
+        if (data.token) sessionStorage.setItem('staffAuthToken', data.token);
         sessionStorage.setItem('userRole', 'admin');
         sessionStorage.setItem('username', data.user?.username || 'suyash');
         if (data.user?.email) sessionStorage.setItem('userEmail', data.user.email);

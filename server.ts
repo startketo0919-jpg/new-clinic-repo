@@ -8,11 +8,22 @@ import cors from "cors";
 import { createServer as createViteServer } from "vite";
 import { db, pool } from "./src/db/index.js";
 import { initDb } from "./src/db/init.js";
-import { hashPassword, verifyPassword } from "./src/db/auth-utils.js";
+import { hashPassword, verifyPassword, generateAuthToken, verifyAuthToken } from "./src/db/auth-utils.js";
 import { liveQueue, patientRegistry, users, appointments, settings, whatsappMessages, whatsappTemplates, delhiveryOrders, patientShipments } from "./src/db/schema.js";
 import { eq, desc, asc, and } from "drizzle-orm";
-// We don't enforce requireAuth for all actions since patients self-checkin, but we should in production.
-import { requireAuth, AuthRequest } from "./src/middleware/auth.js";
+import { requireStaffAuth, requireAdminAuth, optionalAuth, AuthRequest } from "./src/middleware/auth.js";
+import { 
+  getClientIp, 
+  securityHeaders, 
+  checkLoginRateLimit, 
+  recordLoginFailure, 
+  clearLoginFailures, 
+  checkOtpSendRateLimit, 
+  recordOtpSent, 
+  recordOtpVerifyFailure, 
+  clearOtpVerifyFailures, 
+  apiAntiAbuseLimiter 
+} from "./src/middleware/security.js";
 
 async function startServer() {
   try {
@@ -24,6 +35,9 @@ async function startServer() {
   const app = express();
   const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
+  app.disable("x-powered-by");
+  app.use(securityHeaders);
+  app.use("/api", apiAntiAbuseLimiter);
   app.use(cors());
   app.use(express.json());
 
@@ -147,8 +161,14 @@ async function startServer() {
     }
   });
 
-  // Diagnostic endpoint to trigger database table creation and inspect output
-  app.get("/api/init-db", async (req, res) => {
+  // Diagnostic endpoint to trigger database table creation and inspect output (Protected)
+  app.get("/api/init-db", optionalAuth, async (req: AuthRequest, res) => {
+    const secret = req.query.secret;
+    const isAuthorized = (req.user && req.user.role === 'admin') || secret === (process.env.SETUP_SECRET || 'Suyash@924219762788');
+    if (!isAuthorized) {
+      return res.status(403).json({ error: 'Forbidden: Superadmin authentication or valid setup secret required.' });
+    }
+
     try {
       await initDb();
       const [rows] = await (pool as any).query("SHOW TABLES;");
@@ -239,7 +259,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/shipments/:id/status', async (req, res) => {
+  app.patch('/api/shipments/:id/status', requireStaffAuth, async (req, res) => {
     try {
       const { id } = req.params;
       const { status } = req.body;
@@ -258,7 +278,7 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/shipments/:id', async (req, res) => {
+  app.delete('/api/shipments/:id', requireStaffAuth, async (req, res) => {
     try {
       const { id } = req.params;
       await db.delete(patientShipments).where(eq(patientShipments.id, id));
@@ -293,7 +313,7 @@ async function startServer() {
 
   // WhatsApp Webhook Event Receiver (POST)
   
-  app.post('/api/whatsapp/send', async (req, res) => {
+  app.post('/api/whatsapp/send', requireStaffAuth, async (req, res) => {
     try {
       let { phone, content, templateName, templateLanguage, templateComponents } = req.body;
       // Auto-append 91 if it's a 10 digit Indian number for WhatsApp
@@ -399,10 +419,13 @@ async function startServer() {
 
 const otpStore = new Map<string, { otp: string, expires: number, type?: string }>();
 
-app.post('/api/login', async (req, res) => {
+app.post('/api/login', checkLoginRateLimit, async (req, res) => {
   const { identifier, email, username, password } = req.body;
   const userIdentifier = (identifier || email || username || '').trim().toLowerCase();
+  const clientIp = getClientIp(req);
+
   if (!userIdentifier || !password) {
+    recordLoginFailure(clientIp);
     return res.status(400).json({ error: 'Email/Username and password are required' });
   }
   
@@ -420,8 +443,11 @@ app.post('/api/login', async (req, res) => {
     if (user) {
       const isValid = verifyPassword(password, user.passwordHash) || (isSuperAdminIdentifier && password === superPass);
       if (isValid) {
+        clearLoginFailures(clientIp);
+        const token = generateAuthToken(user);
         return res.json({ 
           success: true, 
+          token,
           user: { id: user.id, username: user.username, email: user.email, role: user.role } 
         });
       }
@@ -435,12 +461,18 @@ app.post('/api/login', async (req, res) => {
           ON DUPLICATE KEY UPDATE password_hash = VALUES(password_hash), role = 'admin', email = 'skgservicesin@gmail.com';
         `, [hashed]);
       } catch {}
+
+      clearLoginFailures(clientIp);
+      const superAdminUser = { id: '1', username: 'suyash', email: 'skgservicesin@gmail.com', role: 'admin' };
+      const token = generateAuthToken(superAdminUser);
       return res.json({ 
         success: true, 
-        user: { id: '1', username: 'suyash', email: 'skgservicesin@gmail.com', role: 'admin' } 
+        token,
+        user: superAdminUser
       });
     }
 
+    recordLoginFailure(clientIp);
     res.status(401).json({ error: 'Invalid email/username or password' });
   } catch (err: any) {
     console.error('Login error', err);
@@ -448,7 +480,7 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-app.post('/api/send-otp', async (req, res) => {
+app.post('/api/send-otp', checkOtpSendRateLimit, async (req, res) => {
   const { email, fullName, type } = req.body;
   if (!email) return res.status(400).json({ error: 'Email is required' });
   const otp = Math.floor(100000 + Math.random() * 900000).toString();
@@ -506,6 +538,7 @@ app.post('/api/send-otp', async (req, res) => {
       </div>
     `
     });
+    recordOtpSent(getClientIp(req), email);
     res.json({ success: true });
   } catch (error) {
     console.error("Failed to send OTP", error);
@@ -578,21 +611,52 @@ app.post('/api/send-styled-email', async (req, res) => {
 
 app.post('/api/verify-otp', async (req, res) => {
   const { email, otp } = req.body;
-  const stored = otpStore.get(email);
+  if (!email || !otp) return res.status(400).json({ error: 'Email and OTP are required' });
 
-  if (!stored) return res.status(400).json({ error: 'OTP not found or expired' });
+  const cleanEmail = email.trim().toLowerCase();
+  const stored = otpStore.get(cleanEmail);
+
+  if (!stored) return res.status(400).json({ error: 'OTP not found or expired. Please request a new code.' });
+  
   if (Date.now() > stored.expires) {
-    otpStore.delete(email);
-    return res.status(400).json({ error: 'OTP expired' });
+    otpStore.delete(cleanEmail);
+    clearOtpVerifyFailures(cleanEmail);
+    return res.status(400).json({ error: 'OTP expired. Please request a new code.' });
   }
-  if (stored.otp !== otp) return res.status(400).json({ error: 'Invalid OTP' });
 
-  otpStore.delete(email);
-  res.json({ success: true });
+  if (stored.otp !== String(otp).trim()) {
+    const fails = recordOtpVerifyFailure(cleanEmail);
+    if (fails >= 5) {
+      otpStore.delete(cleanEmail);
+      clearOtpVerifyFailures(cleanEmail);
+      return res.status(429).json({ error: 'Too many incorrect attempts. This OTP has been invalidated for security. Please request a fresh OTP.' });
+    }
+    return res.status(400).json({ error: `Invalid OTP. ${5 - fails} attempts remaining.` });
+  }
+
+  otpStore.delete(cleanEmail);
+  clearOtpVerifyFailures(cleanEmail);
+
+  try {
+    const allUsers = await db.select().from(users);
+    const user = allUsers.find(u => 
+      (u.email && u.email.trim().toLowerCase() === cleanEmail) || 
+      (u.username && u.username.trim().toLowerCase() === cleanEmail)
+    ) || { id: 'staff', username: cleanEmail.split('@')[0], role: 'staff', email: cleanEmail };
+
+    const token = generateAuthToken(user);
+    res.json({ 
+      success: true, 
+      token,
+      user: { id: user.id, username: user.username, email: user.email, role: user.role } 
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to complete authentication: ' + err.message });
+  }
 });
 
 // Forgot password - Send OTP to user's email
-app.post('/api/forgot-password', async (req, res) => {
+app.post('/api/forgot-password', checkOtpSendRateLimit, async (req, res) => {
   const { identifier } = req.body;
   if (!identifier || !identifier.trim()) {
     return res.status(400).json({ error: 'Please enter your email or username.' });
@@ -653,6 +717,7 @@ app.post('/api/forgot-password', async (req, res) => {
       `
     });
 
+    recordOtpSent(getClientIp(req), targetEmail);
     res.json({ success: true, email: targetEmail, message: `Password reset code sent to ${targetEmail}` });
   } catch (err: any) {
     console.error("Forgot password error", err);
@@ -680,12 +745,21 @@ app.post('/api/reset-password', async (req, res) => {
 
   if (Date.now() > stored.expires) {
     otpStore.delete(cleanEmail);
+    clearOtpVerifyFailures(cleanEmail);
     return res.status(400).json({ error: 'Reset code has expired. Please request a new one.' });
   }
 
   if (stored.otp !== String(otp).trim()) {
-    return res.status(400).json({ error: 'Invalid reset code. Please try again.' });
+    const fails = recordOtpVerifyFailure(cleanEmail);
+    if (fails >= 5) {
+      otpStore.delete(cleanEmail);
+      clearOtpVerifyFailures(cleanEmail);
+      return res.status(429).json({ error: 'Too many incorrect attempts. This reset code has been invalidated for security. Please request a fresh code.' });
+    }
+    return res.status(400).json({ error: `Invalid reset code. ${5 - fails} attempts remaining.` });
   }
+
+  clearOtpVerifyFailures(cleanEmail);
 
   try {
     const hashed = hashPassword(newPassword);
@@ -713,9 +787,23 @@ app.post('/api/reset-password', async (req, res) => {
   }
 });
 
-app.post("/api/action", async (req, res) => {
+app.post("/api/action", optionalAuth, async (req: AuthRequest, res) => {
     try {
       const { type, payload } = req.body;
+
+      // Enforce server-side authorization boundaries
+      const adminActions = ['ADD_USER', 'DELETE_USER', 'UPDATE_USER_PASSWORD', 'UPDATE_USER_EMAIL', 'UPDATE_SETTINGS', 'RESET_DB'];
+      const staffActions = ['UPDATE_STATUS', 'REORDER_QUEUE', 'UPDATE_CURRENT', 'DELETE_PATIENT_RECORD', 'UPDATE_FOLLOW_UP'];
+
+      if (adminActions.includes(type)) {
+        if (!req.user || req.user.role !== 'admin') {
+          return res.status(403).json({ error: 'Forbidden: Superadmin authorization required for this action.' });
+        }
+      } else if (staffActions.includes(type)) {
+        if (!req.user) {
+          return res.status(401).json({ error: 'Unauthorized: Staff session required for queue management.' });
+        }
+      }
 
       if (type === 'ADD_PATIENT') {
         const { patient, newRecord } = payload;
@@ -854,7 +942,7 @@ app.post("/api/action", async (req, res) => {
   });
 
   
-  app.post('/api/whatsapp/templates', async (req, res) => {
+  app.post('/api/whatsapp/templates', requireAdminAuth, async (req, res) => {
     try {
       const { templates } = req.body;
       await db.delete(whatsappTemplates);
@@ -870,7 +958,7 @@ app.post("/api/action", async (req, res) => {
 
   
   // Delhivery Courier Integration
-  app.post('/api/delhivery/rates', async (req, res) => {
+  app.post('/api/delhivery/rates', requireStaffAuth, async (req, res) => {
     try {
       const dbSettings = await db.select().from(settings).where(eq(settings.id, "default")).limit(1);
       const s = dbSettings[0];
@@ -897,7 +985,7 @@ app.post("/api/action", async (req, res) => {
     }
   });
 
-  app.post('/api/delhivery/create', async (req, res) => {
+  app.post('/api/delhivery/create', requireStaffAuth, async (req, res) => {
     try {
       const dbSettings = await db.select().from(settings).where(eq(settings.id, "default")).limit(1);
       const s = dbSettings[0];
@@ -1049,7 +1137,7 @@ app.post("/api/action", async (req, res) => {
     }
   });
   
-  app.post('/api/delhivery/pickup', async (req, res) => {
+  app.post('/api/delhivery/pickup', requireStaffAuth, async (req, res) => {
     try {
       const dbSettings = await db.select().from(settings).where(eq(settings.id, "default")).limit(1);
       const s = dbSettings[0];
@@ -1257,7 +1345,7 @@ app.post("/api/action", async (req, res) => {
   });
 
 
-      app.get('/api/delhivery/label-url/:awb', async (req, res) => {
+      app.get('/api/delhivery/label-url/:awb', requireStaffAuth, async (req, res) => {
     try {
       const dbSettings = await db.select().from(settings).where(eq(settings.id, "default")).limit(1);
       const s = dbSettings[0];
@@ -1286,7 +1374,7 @@ app.post("/api/action", async (req, res) => {
     }
   });
 
-  app.get('/api/delhivery/proxy-pdf', async (req, res) => {
+  app.get('/api/delhivery/proxy-pdf', requireStaffAuth, async (req, res) => {
     try {
       const url = req.query.url as string;
       if (!url) return res.status(400).send('Missing url parameter');
@@ -1355,11 +1443,11 @@ app.post("/api/action", async (req, res) => {
     }
   };
 
-  app.get('/api/delhivery/label-pdf/:awb', handleDelhiveryLabelPdf);
-  app.get('/api/delhivery/label/:awb.pdf', handleDelhiveryLabelPdf);
-  app.get('/api/delhivery/label/:awb', handleDelhiveryLabelPdf);
+  app.get('/api/delhivery/label-pdf/:awb', requireStaffAuth, handleDelhiveryLabelPdf);
+  app.get('/api/delhivery/label/:awb.pdf', requireStaffAuth, handleDelhiveryLabelPdf);
+  app.get('/api/delhivery/label/:awb', requireStaffAuth, handleDelhiveryLabelPdf);
 
-  app.get('/api/delhivery/orders', async (req, res) => {
+  app.get('/api/delhivery/orders', requireStaffAuth, async (req, res) => {
     try {
       const orders = await db.select().from(delhiveryOrders).orderBy(desc(delhiveryOrders.timestamp));
       res.json(orders);
@@ -1369,7 +1457,7 @@ app.post("/api/action", async (req, res) => {
   });
 
   // Import / Sync an existing Delhivery shipment by AWB into local order history
-  app.post('/api/delhivery/import-order', async (req, res) => {
+  app.post('/api/delhivery/import-order', requireStaffAuth, async (req, res) => {
     try {
       const dbSettings = await db.select().from(settings).where(eq(settings.id, "default")).limit(1);
       const s = dbSettings[0];

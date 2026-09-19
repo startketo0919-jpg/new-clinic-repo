@@ -34,3 +34,56 @@ export function verifyPassword(password: string, storedHash: string): boolean {
   // Graceful fallback during migration
   return storedHash === password;
 }
+
+export interface TokenPayload {
+  id: string;
+  username: string;
+  role: string;
+  email?: string;
+  exp: number; // Unix timestamp in seconds
+}
+
+const AUTH_SECRET = process.env.SESSION_SECRET || 'khc-super-secret-auth-key-salt-924219762788';
+
+/**
+ * Generates an HMAC-SHA256 cryptographically signed session token for authenticated users.
+ * Valid for 7 days. Format: <base64urlPayload>.<base64urlSignature>
+ */
+export function generateAuthToken(user: { id: string; username: string; role: string; email?: string }): string {
+  const payload: TokenPayload = {
+    id: String(user.id),
+    username: user.username,
+    role: user.role,
+    email: user.email,
+    exp: Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60)
+  };
+  const payloadBase64 = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const signature = crypto.createHmac('sha256', AUTH_SECRET).update(payloadBase64).digest('base64url');
+  return `${payloadBase64}.${signature}`;
+}
+
+/**
+ * Cryptographically verifies an auth token using timing-safe comparison and checks expiration.
+ * Returns decoded payload if authentic and valid, or null if tampered/expired.
+ */
+export function verifyAuthToken(token: string): TokenPayload | null {
+  if (!token || typeof token !== 'string') return null;
+  const parts = token.split('.');
+  if (parts.length !== 2) return null;
+
+  const [payloadBase64, signature] = parts;
+  const expectedSig = crypto.createHmac('sha256', AUTH_SECRET).update(payloadBase64).digest('base64url');
+
+  try {
+    const isSigValid = crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSig));
+    if (!isSigValid) return null;
+
+    const payload: TokenPayload = JSON.parse(Buffer.from(payloadBase64, 'base64url').toString('utf8'));
+    if (!payload.exp || payload.exp < Math.floor(Date.now() / 1000)) {
+      return null;
+    }
+    return payload;
+  } catch {
+    return null;
+  }
+}
