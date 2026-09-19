@@ -114,6 +114,19 @@ export async function initDb() {
       items TEXT NOT NULL,
       status VARCHAR(50) DEFAULT 'Created',
       timestamp TIMESTAMP NOT NULL DEFAULT NOW()
+    );`,
+
+    `CREATE TABLE IF NOT EXISTS patient_shipments (
+      id TEXT PRIMARY KEY,
+      patient_name TEXT NOT NULL,
+      phone VARCHAR(20) NOT NULL,
+      email VARCHAR(255),
+      address TEXT NOT NULL,
+      pincode VARCHAR(10) NOT NULL,
+      notes TEXT,
+      status VARCHAR(50) NOT NULL DEFAULT 'Pending',
+      created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      completed_at TIMESTAMP
     );`
   ];
 
