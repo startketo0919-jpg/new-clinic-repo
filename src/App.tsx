@@ -11,6 +11,7 @@ import Dashboard from './pages/Dashboard';
 import SettingsPage from './pages/SettingsPage';
 import WaitingRoom from './pages/WaitingRoom';
 import PatientTracker from './pages/PatientTracker';
+import PatientShipmentForm from './pages/PatientShipmentForm';
 
 export default function App() {
   return (
@@ -23,6 +24,9 @@ export default function App() {
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/tv" element={<WaitingRoom />} />
           <Route path="/track" element={<PatientTracker />} />
+          <Route path="/shipment" element={<PatientShipmentForm />} />
+          <Route path="/shipment-form" element={<PatientShipmentForm />} />
+          <Route path="/courier-form" element={<PatientShipmentForm />} />
         </Routes>
       </BrowserRouter>
     </ClinicProvider>
