@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   X, Printer, Usb, Wifi, Crop, Download, RefreshCw, 
-  Settings, CheckCircle2, AlertCircle, FileText, ArrowRight, ExternalLink 
+  CheckCircle2, AlertCircle, FileText, ExternalLink, Sparkles 
 } from 'lucide-react';
 
 interface LabelCropModalProps {
@@ -11,6 +11,20 @@ interface LabelCropModalProps {
   initialAwb?: string;
 }
 
+interface CropBox {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+interface PdfBounds {
+  cropX: number;
+  cropY: number;
+  cropW: number;
+  cropH: number;
+}
+
 export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb }: LabelCropModalProps) {
   const [labelUrl, setLabelUrl] = useState(initialUrl || '');
   const [awbInput, setAwbInput] = useState(initialAwb || '');
@@ -18,14 +32,22 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
   const [error, setError] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
 
-  // Cropped Result
+  // Vector PDF Engine state (Selectable text, 100% vector resolution)
+  const [rawPdfBuffer, setRawPdfBuffer] = useState<ArrayBuffer | null>(null);
+  const [detectedPdfBounds, setDetectedPdfBounds] = useState<PdfBounds | null>(null);
+  const [vectorPdfBlobUrl, setVectorPdfBlobUrl] = useState<string | null>(null);
+  const [vectorPdfBytes, setVectorPdfBytes] = useState<Uint8Array | null>(null);
+  const [previewMode, setPreviewMode] = useState<'vector' | 'image'>('vector');
+  const prevBlobUrlRef = useRef<string | null>(null);
+
+  // High-res raster canvas (for ESC/POS & fallback preview)
   const [croppedDataUrl, setCroppedDataUrl] = useState<string | null>(null);
   const [cropDimensions, setCropDimensions] = useState<{ width: number; height: number } | null>(null);
 
-  // Label Size Presets
+  // Thermal Roll Size Presets
   const [selectedSize, setSelectedSize] = useState<'75x110' | '75x125' | '75x130' | 'auto'>('75x110');
   
-  // IP Printer Settings (Saved to localStorage)
+  // IP Printer Settings (Stored in localStorage)
   const [printerIp, setPrinterIp] = useState(() => localStorage.getItem('thermal_printer_ip') || '192.168.29.2');
   const [printerPort, setPrinterPort] = useState(() => localStorage.getItem('thermal_printer_port') || '9100');
   const [showPrinterSettings, setShowPrinterSettings] = useState(false);
@@ -33,15 +55,13 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
   // Printing status
   const [isPrinting, setIsPrinting] = useState(false);
 
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-
   // Save IP settings to localStorage whenever changed
   useEffect(() => {
     localStorage.setItem('thermal_printer_ip', printerIp);
     localStorage.setItem('thermal_printer_port', printerPort);
   }, [printerIp, printerPort]);
 
-  // Load when opened
+  // Load / cleanup when modal opened or closed
   useEffect(() => {
     if (isOpen) {
       if (initialAwb) {
@@ -53,49 +73,28 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
       }
     } else {
       setCroppedDataUrl(null);
+      setRawPdfBuffer(null);
+      setDetectedPdfBounds(null);
+      if (prevBlobUrlRef.current) {
+        URL.revokeObjectURL(prevBlobUrlRef.current);
+        prevBlobUrlRef.current = null;
+      }
+      setVectorPdfBlobUrl(null);
+      setVectorPdfBytes(null);
       setError(null);
       setStatusMsg(null);
     }
   }, [isOpen, initialUrl, initialAwb]);
 
-  // Resolve any external or S3 URLs through the server-side proxy to prevent CORS failures
-  const getProxiedUrl = (url: string) => {
-    if (!url) return url;
-    const trimmed = url.trim();
-    if (trimmed.startsWith('data:') || trimmed.startsWith('blob:')) return trimmed;
-    if (trimmed.startsWith('/')) return trimmed;
-    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
-      if (typeof window !== 'undefined' && trimmed.startsWith(window.location.origin)) {
-        return trimmed;
+  // Clean up blob URLs on unmount
+  useEffect(() => {
+    return () => {
+      if (prevBlobUrlRef.current) {
+        URL.revokeObjectURL(prevBlobUrlRef.current);
+        prevBlobUrlRef.current = null;
       }
-      return `/api/delhivery/proxy-pdf?url=${encodeURIComponent(trimmed)}`;
-    }
-    return trimmed;
-  };
-
-  const fetchLabelByAwb = async (awb: string) => {
-    if (!awb.trim()) return;
-    const cleanAwb = awb.trim();
-
-    // If user pasted a URL into the AWB box, handle it gracefully
-    if (cleanAwb.startsWith('http://') || cleanAwb.startsWith('https://')) {
-      setLabelUrl(cleanAwb);
-      return loadAndProcessPdf(cleanAwb);
-    }
-
-    setIsLoading(true);
-    setError(null);
-    setStatusMsg("Fetching label from Delhivery...");
-    try {
-      // Use the server proxy endpoint which streams binary PDF buffer with CORS headers
-      const proxyUrl = `/api/delhivery/label/${encodeURIComponent(cleanAwb)}.pdf`;
-      setLabelUrl(proxyUrl);
-      await loadAndProcessPdf(proxyUrl);
-    } catch (e: any) {
-      setError("Failed to fetch label for AWB: " + e.message);
-      setIsLoading(false);
-    }
-  };
+    };
+  }, []);
 
   // Dynamically load PDF.js if not already present
   const ensurePdfJsLoaded = async (): Promise<any> => {
@@ -115,79 +114,73 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
     });
   };
 
-  const loadAndProcessPdf = async (urlOrData: string | ArrayBuffer) => {
+  // Dynamically load pdf-lib for lossless Vector PDF manipulation
+  const ensurePdfLibLoaded = async (): Promise<any> => {
+    if ((window as any).PDFLib) {
+      return (window as any).PDFLib;
+    }
+    return new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js';
+      script.onload = () => resolve((window as any).PDFLib);
+      script.onerror = () => {
+        // Fallback to unpkg CDN if cdnjs is blocked
+        const fallback = document.createElement('script');
+        fallback.src = 'https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js';
+        fallback.onload = () => resolve((window as any).PDFLib);
+        fallback.onerror = () => reject(new Error("Failed to load PDF vector manipulation engine"));
+        document.head.appendChild(fallback);
+      };
+      document.head.appendChild(script);
+    });
+  };
+
+  // Route external URLs through server proxy to bypass CORS
+  const getProxiedUrl = (url: string) => {
+    if (!url) return url;
+    const trimmed = url.trim();
+    if (trimmed.startsWith('data:') || trimmed.startsWith('blob:')) return trimmed;
+    if (trimmed.startsWith('/')) return trimmed;
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+      if (typeof window !== 'undefined' && trimmed.startsWith(window.location.origin)) {
+        return trimmed;
+      }
+      return `/api/delhivery/proxy-pdf?url=${encodeURIComponent(trimmed)}`;
+    }
+    return trimmed;
+  };
+
+  const fetchLabelByAwb = async (awb: string) => {
+    if (!awb.trim()) return;
+    const cleanAwb = awb.trim();
+
+    // If user pasted a URL into the AWB input box, route smoothly
+    if (cleanAwb.startsWith('http://') || cleanAwb.startsWith('https://')) {
+      setLabelUrl(cleanAwb);
+      return loadAndProcessPdf(cleanAwb);
+    }
+
     setIsLoading(true);
     setError(null);
-    setStatusMsg("Loading and processing label...");
+    setStatusMsg("Fetching label from Delhivery...");
     try {
-      const pdfjs = await ensurePdfJsLoaded();
-
-      let docSource: any;
-      if (typeof urlOrData === 'string') {
-        const trimmed = urlOrData.trim();
-
-        // If user typed an AWB number directly into the URL input box
-        if (/^\d{8,16}$/.test(trimmed)) {
-          setAwbInput(trimmed);
-          return fetchLabelByAwb(trimmed);
-        }
-
-        const finalUrl = getProxiedUrl(trimmed);
-        setStatusMsg("Fetching PDF data from server...");
-        const res = await fetch(finalUrl);
-        if (!res.ok) {
-          const errText = await res.text().catch(() => '');
-          throw new Error(`Server returned ${res.status}: ${errText || res.statusText}`);
-        }
-        const arrayBuffer = await res.arrayBuffer();
-        docSource = { data: new Uint8Array(arrayBuffer) };
-      } else {
-        docSource = { data: new Uint8Array(urlOrData) };
-      }
-
-      setStatusMsg("Rendering label and removing blank margins...");
-      const loadingTask = pdfjs.getDocument(docSource);
-      const pdf = await loadingTask.promise;
-      const page = await pdf.getPage(1);
-
-      // Render at high resolution (scale 3x, identical to baseScale in Android PdfProcessor.kt)
-      const scale = 3.0;
-      const viewport = page.getViewport({ scale });
-
-      const canvas = document.createElement('canvas');
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) throw new Error("Could not initialize 2D context");
-
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-      await page.render({ canvasContext: ctx, viewport }).promise;
-
-      // Crop whitespace using identical algorithm from Android PdfProcessor.kt
-      const croppedCanvas = cropWhitespace(canvas);
-      setCroppedDataUrl(croppedCanvas.toDataURL('image/png'));
-      setCropDimensions({ width: croppedCanvas.width, height: croppedCanvas.height });
-      setIsLoading(false);
-      setStatusMsg(null);
+      const proxyUrl = `/api/delhivery/label/${encodeURIComponent(cleanAwb)}.pdf`;
+      setLabelUrl(proxyUrl);
+      await loadAndProcessPdf(proxyUrl);
     } catch (e: any) {
-      console.error("PDF Processing error:", e);
-      setError("Error processing PDF label: " + (e.message || "Invalid PDF"));
+      setError("Failed to fetch label for AWB: " + e.message);
       setIsLoading(false);
     }
   };
 
   /**
-   * Whitespace crop matching PdfProcessor.kt cropWhitespace logic:
-   * Scans pixel by pixel, finds bounds of non-white pixels (r < 245 || g < 245 || b < 245),
-   * adds a 4px margin, and crops to the bounding box.
+   * Scan canvas pixels at high resolution to find bounds of printed ink
    */
-  const cropWhitespace = (source: HTMLCanvasElement): HTMLCanvasElement => {
+  const getCanvasWhitespaceBox = (source: HTMLCanvasElement): CropBox => {
     const width = source.width;
     const height = source.height;
     const ctx = source.getContext('2d');
-    if (!ctx) return source;
+    if (!ctx) return { minX: 0, minY: 0, maxX: width, maxY: height };
 
     const imgData = ctx.getImageData(0, 0, width, height);
     const pixels = imgData.data;
@@ -221,10 +214,16 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
     maxX = Math.min(width - 1, maxX + margin);
     maxY = Math.min(height - 1, maxY + margin);
 
-    if (minX >= maxX || minY >= maxY) return source; // Nothing to crop
+    if (minX >= maxX || minY >= maxY) {
+      return { minX: 0, minY: 0, maxX: width, maxY: height };
+    }
 
-    const cropWidth = maxX - minX + 1;
-    const cropHeight = maxY - minY + 1;
+    return { minX, minY, maxX, maxY };
+  };
+
+  const cropWhitespace = (source: HTMLCanvasElement, box: CropBox): HTMLCanvasElement => {
+    const cropWidth = box.maxX - box.minX + 1;
+    const cropHeight = box.maxY - box.minY + 1;
 
     const cropped = document.createElement('canvas');
     cropped.width = cropWidth;
@@ -232,8 +231,173 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
     const croppedCtx = cropped.getContext('2d');
     if (!croppedCtx) return source;
 
-    croppedCtx.drawImage(source, minX, minY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+    croppedCtx.drawImage(source, box.minX, box.minY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
     return cropped;
+  };
+
+  /**
+   * Generates a 100% Vector PDF with selectable text and crystal-clear barcodes.
+   * Adjusts the MediaBox and CropBox to center on the selected thermal roll size.
+   */
+  const generateVectorPdf = async (
+    rawBytes: ArrayBuffer,
+    bounds: PdfBounds,
+    targetSize: '75x110' | '75x125' | '75x130' | 'auto'
+  ) => {
+    try {
+      const { PDFDocument } = await ensurePdfLibLoaded();
+      const pdfDoc = await PDFDocument.load(rawBytes);
+
+      // Strip any extra pages (e.g. Delhivery terms) so thermal roll prints only 1 label
+      while (pdfDoc.getPageCount() > 1) {
+        pdfDoc.removePage(1);
+      }
+
+      const page = pdfDoc.getPages()[0];
+      const { cropX, cropY, cropW, cropH } = bounds;
+
+      let newX = cropX;
+      let newY = cropY;
+      let newW = cropW;
+      let newH = cropH;
+
+      if (targetSize !== 'auto') {
+        const [mmW, mmH] = targetSize === '75x110' ? [75, 110] 
+          : targetSize === '75x125' ? [75, 125]
+          : [75, 130];
+        
+        // 1 mm = 2.8346457 PDF points
+        const ptW = mmW * 2.8346457;
+        const ptH = mmH * 2.8346457;
+
+        if (cropW <= ptW) {
+          const diffX = ptW - cropW;
+          newX = cropX - (diffX / 2);
+          newW = ptW;
+        }
+        if (cropH <= ptH) {
+          const diffY = ptH - cropH;
+          newY = cropY - (diffY / 2);
+          newH = ptH;
+        }
+      }
+
+      // Set MediaBox and CropBox in the native PDF stream
+      page.setMediaBox(newX, newY, newW, newH);
+      page.setCropBox(newX, newY, newW, newH);
+      page.setBleedBox(newX, newY, newW, newH);
+      page.setTrimBox(newX, newY, newW, newH);
+
+      const savedBytes = await pdfDoc.save();
+      const blob = new Blob([savedBytes], { type: 'application/pdf' });
+      const blobUrl = URL.createObjectURL(blob);
+
+      if (prevBlobUrlRef.current) {
+        URL.revokeObjectURL(prevBlobUrlRef.current);
+      }
+      prevBlobUrlRef.current = blobUrl;
+
+      setVectorPdfBytes(savedBytes);
+      setVectorPdfBlobUrl(blobUrl);
+    } catch (e: any) {
+      console.error("Vector PDF generation error:", e);
+    }
+  };
+
+  const handleSizeChange = async (size: '75x110' | '75x125' | '75x130' | 'auto') => {
+    setSelectedSize(size);
+    if (rawPdfBuffer && detectedPdfBounds) {
+      setIsLoading(true);
+      setStatusMsg(`Re-centering vector PDF to ${size === 'auto' ? 'Auto Crop' : size + ' mm'}...`);
+      await generateVectorPdf(rawPdfBuffer, detectedPdfBounds, size);
+      setIsLoading(false);
+      setStatusMsg(null);
+    }
+  };
+
+  /**
+   * Main loader: fetches PDF bytes, detects whitespace bounds, and builds Vector PDF
+   */
+  const loadAndProcessPdf = async (urlOrData: string | ArrayBuffer) => {
+    setIsLoading(true);
+    setError(null);
+    setStatusMsg("Loading and processing vector label...");
+    try {
+      const pdfjs = await ensurePdfJsLoaded();
+
+      let arrayBuffer: ArrayBuffer;
+      if (typeof urlOrData === 'string') {
+        const trimmed = urlOrData.trim();
+
+        // If user typed an AWB number directly into the URL input box
+        if (/^\d{8,16}$/.test(trimmed)) {
+          setAwbInput(trimmed);
+          return fetchLabelByAwb(trimmed);
+        }
+
+        const finalUrl = getProxiedUrl(trimmed);
+        setStatusMsg("Fetching PDF data from server...");
+        const res = await fetch(finalUrl);
+        if (!res.ok) {
+          const errText = await res.text().catch(() => '');
+          throw new Error(`Server returned ${res.status}: ${errText || res.statusText}`);
+        }
+        arrayBuffer = await res.arrayBuffer();
+      } else {
+        arrayBuffer = urlOrData;
+      }
+
+      setRawPdfBuffer(arrayBuffer);
+
+      setStatusMsg("Scanning label layout and blank margins...");
+      const loadingTask = pdfjs.getDocument({ data: new Uint8Array(arrayBuffer) });
+      const pdf = await loadingTask.promise;
+      const page = await pdf.getPage(1);
+
+      // Render at high resolution (scale 3.0) to accurately detect ink bounds
+      const scale = 3.0;
+      const viewport = page.getViewport({ scale });
+
+      const canvas = document.createElement('canvas');
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error("Could not initialize 2D context");
+
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      await page.render({ canvasContext: ctx, viewport }).promise;
+
+      // Detect ink bounding box in canvas pixels
+      const box = getCanvasWhitespaceBox(canvas);
+      
+      // Convert canvas pixel coordinates to true PDF point coordinates
+      const [ptX1, ptY1] = viewport.convertToPdfPoint(box.minX, box.minY);
+      const [ptX2, ptY2] = viewport.convertToPdfPoint(box.maxX, box.maxY);
+      const bounds: PdfBounds = {
+        cropX: Math.min(ptX1, ptX2),
+        cropY: Math.min(ptY1, ptY2),
+        cropW: Math.max(20, Math.abs(ptX2 - ptX1)),
+        cropH: Math.max(20, Math.abs(ptY2 - ptY1))
+      };
+      setDetectedPdfBounds(bounds);
+
+      // Create cropped PNG for ESC/POS raster and fallback preview
+      const croppedCanvas = cropWhitespace(canvas, box);
+      setCroppedDataUrl(croppedCanvas.toDataURL('image/png'));
+      setCropDimensions({ width: croppedCanvas.width, height: croppedCanvas.height });
+
+      setStatusMsg("Building lossless Vector PDF (Text Selectable)...");
+      await generateVectorPdf(arrayBuffer, bounds, selectedSize);
+
+      setIsLoading(false);
+      setStatusMsg(null);
+    } catch (e: any) {
+      console.error("PDF Processing error:", e);
+      setError("Error processing PDF label: " + (e.message || "Invalid PDF"));
+      setIsLoading(false);
+    }
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -249,62 +413,60 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
   };
 
   /**
-   * Print via USB Thermal Printer / System Driver:
-   * Formats the cropped image with zero margin onto 75mm label roll using @media print.
+   * Primary Print Action: Prints the native Vector PDF directly with text selection and sharp barcodes
    */
-  const handlePrintUsbDriver = () => {
-    if (!croppedDataUrl) return;
+  const handlePrintVectorPdf = () => {
+    if (!vectorPdfBlobUrl) return;
 
-    const [sizeW, sizeH] = selectedSize === '75x110' ? [75, 110] 
-      : selectedSize === '75x125' ? [75, 125]
-      : selectedSize === '75x130' ? [75, 130]
-      : [75, 120];
-
-    const printWindow = window.open('', '_blank', 'width=450,height=650');
-    if (!printWindow) {
-      alert("Please allow popups to enable direct thermal printing.");
-      return;
+    let iframe = document.getElementById('vector-pdf-print-frame') as HTMLIFrameElement | null;
+    if (iframe) {
+      iframe.remove();
     }
 
-    printWindow.document.write(`
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <title>Thermal Label Print</title>
-          <style>
-            @page {
-              size: ${sizeW}mm ${sizeH}mm;
-              margin: 0;
-            }
-            * {
-              box-sizing: border-box;
-            }
-            body {
-              margin: 0;
-              padding: 0;
-              width: ${sizeW}mm;
-              height: ${sizeH}mm;
-              display: flex;
-              align-items: center;
-              justify-content: center;
-              background: #fff;
-            }
-            img {
-              max-width: 98%;
-              max-height: 98%;
-              width: auto;
-              height: auto;
-              display: block;
-              image-rendering: -webkit-optimize-contrast;
-            }
-          </style>
-        </head>
-        <body>
-          <img src="${croppedDataUrl}" onload="window.print(); window.close();" />
-        </body>
-      </html>
-    `);
-    printWindow.document.close();
+    iframe = document.createElement('iframe');
+    iframe.id = 'vector-pdf-print-frame';
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    iframe.src = vectorPdfBlobUrl;
+    document.body.appendChild(iframe);
+
+    iframe.onload = () => {
+      setTimeout(() => {
+        try {
+          iframe?.contentWindow?.focus();
+          iframe?.contentWindow?.print();
+        } catch (err) {
+          console.warn("Iframe print blocked or unsupported, opening in print tab:", err);
+          window.open(vectorPdfBlobUrl, '_blank');
+        }
+      }, 400);
+    };
+  };
+
+  /**
+   * Open Vector PDF in a new tab: User can select text, copy details, zoom, and print with Ctrl+P
+   */
+  const handleOpenVectorPdf = () => {
+    if (!vectorPdfBlobUrl) return;
+    const win = window.open(vectorPdfBlobUrl, '_blank');
+    if (!win) {
+      alert("Please allow popups to view and print the vector PDF.");
+    }
+  };
+
+  /**
+   * Download the lossless Vector PDF file
+   */
+  const handleDownloadVectorPdf = () => {
+    if (!vectorPdfBlobUrl) return;
+    const a = document.createElement('a');
+    a.href = vectorPdfBlobUrl;
+    a.download = `delhivery_label_${awbInput || 'cropped'}_vector.pdf`;
+    a.click();
   };
 
   /**
@@ -312,7 +474,7 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
    */
   const handleDirectWebUsb = async () => {
     if (!(navigator as any).usb) {
-      alert("WebUSB is supported in Chrome/Edge on desktop. For other browsers, please use the 'Print via USB / Driver' button.");
+      alert("WebUSB is supported in Chrome/Edge on desktop. Please use 'Print Vector PDF' instead.");
       return;
     }
     try {
@@ -331,8 +493,7 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
       alert("Print sent successfully to USB Thermal Printer!");
     } catch (err: any) {
       console.warn("WebUSB:", err);
-      // If WebUSB was cancelled or unsupported, fallback to standard driver print
-      handlePrintUsbDriver();
+      handlePrintVectorPdf();
     } finally {
       setIsPrinting(false);
     }
@@ -373,19 +534,19 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
     const yH = Math.floor(height / 256);
     const header = [0x1D, 0x76, 0x30, 0x00, xL, xH, yL, yH];
 
-    const rowSize = width / 8;
+    // Raster bytes
     const rasterBytes: number[] = [];
-
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x += 8) {
         let byteVal = 0;
         for (let b = 0; b < 8; b++) {
-          if (x + b < canvas.width) {
-            const idx = (y * canvas.width + (x + b)) * 4;
+          const px = x + b;
+          if (px < canvas.width) {
+            const idx = (y * canvas.width + px) * 4;
             const r = pixels[idx];
             const g = pixels[idx + 1];
             const bl = pixels[idx + 2];
-            const luma = r * 0.299 + g * 0.587 + bl * 0.114;
+            const luma = 0.299 * r + 0.587 * g + 0.114 * bl;
             if (luma < 200) {
               byteVal |= (1 << (7 - b));
             }
@@ -395,27 +556,33 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
       }
     }
 
-    // Feed 3 lines and cut paper (matching PrinterHelper.kt)
-    const footer = [0x0A, 0x0A, 0x0A, 0x1D, 0x56, 0x42, 0x00];
+    // Line feed & Paper cut commands
+    const feeds = [0x0A, 0x0A, 0x0A];
+    const cutCmd = [0x1D, 0x56, 0x42, 0x00];
 
-    const totalBytes = new Uint8Array([...initCmd, ...header, ...rasterBytes, ...footer]);
-    return totalBytes;
+    const fullBuffer = new Uint8Array([
+      ...initCmd,
+      ...header,
+      ...rasterBytes,
+      ...feeds,
+      ...cutCmd
+    ]);
+
+    return fullBuffer;
   };
 
   /**
-   * Direct IP Printer Print:
-   * Sends raw ESC/POS commands to printer IP (e.g. 192.168.29.2:9100)
+   * Send ESC/POS data to IP Thermal Printer:
    */
   const handlePrintIp = async () => {
     if (!croppedDataUrl) return;
     setIsPrinting(true);
-    setStatusMsg(`Connecting to IP Thermal Printer at ${printerIp}:${printerPort}...`);
+    setStatusMsg(`Connecting to IP printer at ${printerIp}:${printerPort}...`);
 
     try {
       const escposData = generateEscPosData();
-      
-      // Attempt direct local network send via fetch (works if printer has HTTP raw port or via local bridge)
-      const res = await fetch(`http://${printerIp}:${printerPort}`, {
+
+      await fetch(`http://${printerIp}:${printerPort}`, {
         method: 'POST',
         mode: 'no-cors',
         body: escposData
@@ -425,8 +592,7 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
       setTimeout(() => setStatusMsg(null), 3000);
     } catch (e: any) {
       console.warn("Direct IP print:", e);
-      // Explain to user and offer standard print
-      alert(`Could not establish raw TCP connection directly from browser to ${printerIp}:${printerPort}. \n\nPlease use "Print via USB / Driver" which sends this exact cropped 75mm label directly to your printer!`);
+      alert(`Could not establish raw TCP connection directly from browser to ${printerIp}:${printerPort}. \n\nPlease use "Print Vector PDF" to print with maximum crispness!`);
     } finally {
       setIsPrinting(false);
     }
@@ -453,13 +619,18 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
               <Crop className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-lg font-bold">Delhivery Label Cropper & Thermal Print</h2>
-              <p className="text-xs text-slate-400">Auto-crop blank whitespace and print to 75mm thermal rolls</p>
+              <div className="flex items-center gap-2">
+                <h2 className="text-lg font-bold">Delhivery Label Cropper & Thermal Print</h2>
+                <span className="text-[10px] bg-teal-500/20 text-teal-300 px-2 py-0.5 rounded-full font-semibold border border-teal-500/30">
+                  Vector Lossless
+                </span>
+              </div>
+              <p className="text-xs text-slate-400">Auto-crops blank margins, preserves crisp vector barcodes and selectable text</p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-colors"
+            className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -477,12 +648,13 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
                 placeholder="Enter AWB Number..."
                 value={awbInput}
                 onChange={(e) => setAwbInput(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && fetchLabelByAwb(awbInput)}
                 className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 focus:border-teal-500 outline-none font-mono"
               />
               <button
                 onClick={() => fetchLabelByAwb(awbInput)}
                 disabled={isLoading || !awbInput.trim()}
-                className="px-3.5 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold whitespace-nowrap disabled:opacity-50"
+                className="px-3.5 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold whitespace-nowrap disabled:opacity-50 cursor-pointer"
               >
                 Fetch
               </button>
@@ -494,12 +666,13 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
                 placeholder="Or paste Label PDF URL..."
                 value={labelUrl}
                 onChange={(e) => setLabelUrl(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && loadAndProcessPdf(labelUrl)}
                 className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 focus:border-teal-500 outline-none"
               />
               <button
                 onClick={() => loadAndProcessPdf(labelUrl)}
                 disabled={isLoading || !labelUrl.trim()}
-                className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold whitespace-nowrap disabled:opacity-50"
+                className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold whitespace-nowrap disabled:opacity-50 cursor-pointer"
               >
                 Load
               </button>
@@ -534,75 +707,163 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
             
             {/* Left: Cropped Label Preview */}
-            <div className="lg:col-span-7 flex flex-col items-center justify-center p-6 bg-slate-100/70 border border-slate-200 rounded-3xl min-h-[350px]">
+            <div className="lg:col-span-7 flex flex-col p-4 bg-slate-100/70 border border-slate-200 rounded-3xl min-h-[480px]">
               {isLoading ? (
-                <div className="text-center py-10 space-y-3">
+                <div className="text-center py-24 space-y-3 m-auto">
                   <div className="w-8 h-8 border-3 border-teal-600 border-t-transparent rounded-full animate-spin mx-auto" />
-                  <p className="text-xs text-slate-600 font-medium">Auto-cropping label whitespace...</p>
+                  <p className="text-xs text-slate-600 font-medium">Generating lossless vector label...</p>
                 </div>
-              ) : croppedDataUrl ? (
-                <div className="flex flex-col items-center space-y-3">
-                  <div className="p-2 bg-white rounded-2xl shadow-md border border-slate-300 max-w-xs sm:max-w-sm">
-                    <img 
-                      src={croppedDataUrl} 
-                      alt="Cropped Delhivery Label" 
-                      className="w-full h-auto rounded-lg object-contain"
-                    />
+              ) : vectorPdfBlobUrl ? (
+                <div className="flex flex-col h-full space-y-2.5">
+                  
+                  {/* Top Quality Banner */}
+                  <div className="flex items-center justify-between bg-white px-3.5 py-2 rounded-xl border border-slate-200 shadow-xs">
+                    <div className="flex items-center gap-2">
+                      <span className="flex h-2 w-2 relative">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                      </span>
+                      <span className="text-xs font-bold text-emerald-800">
+                        Vector PDF &bull; Text Selectable
+                      </span>
+                    </div>
+                    
+                    <div className="flex items-center gap-2">
+                      <div className="flex bg-slate-100 p-0.5 rounded-lg text-[10px] font-semibold">
+                        <button
+                          onClick={() => setPreviewMode('vector')}
+                          className={`px-2 py-0.5 rounded-md transition-all cursor-pointer ${previewMode === 'vector' ? 'bg-white text-teal-800 shadow-xs font-bold' : 'text-slate-500 hover:text-slate-800'}`}
+                        >
+                          Vector PDF
+                        </button>
+                        <button
+                          onClick={() => setPreviewMode('image')}
+                          className={`px-2 py-0.5 rounded-md transition-all cursor-pointer ${previewMode === 'image' ? 'bg-white text-teal-800 shadow-xs font-bold' : 'text-slate-500 hover:text-slate-800'}`}
+                        >
+                          Raster Image
+                        </button>
+                      </div>
+                      <button
+                        onClick={handleOpenVectorPdf}
+                        title="Open in new tab to select, zoom & print"
+                        className="p-1 text-slate-500 hover:text-teal-700 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
+                      >
+                        <ExternalLink className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
-                  {cropDimensions && (
-                    <span className="text-[11px] font-mono text-slate-500 bg-white px-2.5 py-1 rounded-full border border-slate-200 shadow-xs">
-                      Cropped Resolution: {cropDimensions.width} × {cropDimensions.height}px
-                    </span>
-                  )}
+
+                  {/* Main Preview Container */}
+                  <div className="flex-1 w-full bg-white rounded-2xl shadow-sm border border-slate-300 overflow-hidden flex items-center justify-center min-h-[400px]">
+                    {previewMode === 'vector' ? (
+                      <iframe 
+                        src={`${vectorPdfBlobUrl}#toolbar=0&navpanes=0`} 
+                        className="w-full h-full min-h-[400px] border-0 rounded-2xl bg-white"
+                        title="Lossless Vector PDF Preview"
+                      />
+                    ) : (
+                      <img 
+                        src={croppedDataUrl!} 
+                        alt="Cropped Label Preview" 
+                        className="max-h-[380px] w-auto object-contain p-2"
+                      />
+                    )}
+                  </div>
+
+                  {/* Footer Info */}
+                  <div className="flex items-center justify-between px-1 text-[11px] text-slate-500 font-mono">
+                    <span>Roll: {selectedSize === 'auto' ? 'Tight Auto-Crop' : `${selectedSize} mm`}</span>
+                    <span className="text-emerald-700 font-semibold">Lossless Vector (Infinite DPI)</span>
+                  </div>
                 </div>
               ) : (
-                <div className="text-center py-10 text-slate-400 space-y-2">
+                <div className="text-center py-20 text-slate-400 space-y-2 m-auto">
                   <Crop className="w-12 h-12 mx-auto stroke-1 text-slate-300" />
-                  <p className="text-xs">No label loaded yet. Enter an AWB or upload a PDF above.</p>
+                  <p className="text-xs">No label loaded yet. Enter an AWB or paste a URL above.</p>
                 </div>
               )}
             </div>
 
             {/* Right: Thermal Printer Settings & Actions */}
-            <div className="lg:col-span-5 space-y-5">
+            <div className="lg:col-span-5 space-y-4">
               
               {/* Size Presets */}
               <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-2.5">
-                <span className="text-xs font-bold text-slate-800 uppercase tracking-wider block">
-                  Thermal Label Size
-                </span>
-                <div className="grid grid-cols-3 gap-2">
-                  {(['75x110', '75x125', '75x130'] as const).map(size => (
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-800 uppercase tracking-wider block">
+                    Thermal Label Roll Size
+                  </span>
+                  <span className="text-[10px] text-teal-700 bg-teal-50 px-2 py-0.5 rounded font-semibold border border-teal-200">
+                    Vector Preserved
+                  </span>
+                </div>
+                <div className="grid grid-cols-4 gap-1.5">
+                  {(['75x110', '75x125', '75x130', 'auto'] as const).map(size => (
                     <button
                       key={size}
-                      onClick={() => setSelectedSize(size)}
-                      className={`py-2 px-2 text-xs rounded-xl font-medium border text-center transition-all ${
+                      onClick={() => handleSizeChange(size)}
+                      className={`py-2 px-1.5 text-xs rounded-xl font-medium border text-center transition-all cursor-pointer ${
                         selectedSize === size
                           ? 'border-teal-600 bg-teal-50 text-teal-900 font-bold shadow-xs'
                           : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
                       }`}
                     >
-                      {size} mm
+                      {size === 'auto' ? 'Auto Crop' : `${size} mm`}
                     </button>
                   ))}
                 </div>
                 <span className="text-[11px] text-slate-400 block">
-                  Exact standard sizes from your Label-Crop Android app.
+                  Select 75x110mm for standard rolls or Auto Crop to fit content tightly.
                 </span>
               </div>
 
-              {/* IP / USB Printer Configuration Toggle */}
+              {/* Print Action Buttons */}
+              <div className="space-y-2.5 pt-1">
+                
+                {/* 1. Print Vector PDF (Highest Quality) - PRIMARY */}
+                <button
+                  onClick={handlePrintVectorPdf}
+                  disabled={!vectorPdfBlobUrl || isPrinting}
+                  className="w-full py-3 px-4 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold shadow-md hover:shadow-lg flex items-center justify-center gap-2 transition-all disabled:opacity-50 cursor-pointer"
+                >
+                  <Printer className="w-4 h-4" />
+                  <span>Print Vector PDF (Highest Quality)</span>
+                </button>
+
+                {/* 2. Open Vector PDF in Tab (Select Text / Fullscreen Print) */}
+                <button
+                  onClick={handleOpenVectorPdf}
+                  disabled={!vectorPdfBlobUrl}
+                  className="w-full py-2.5 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-sm flex items-center justify-center gap-2 transition-all disabled:opacity-50 cursor-pointer"
+                >
+                  <ExternalLink className="w-4 h-4 text-teal-400" />
+                  <span>Open PDF in Tab (Select Text & Print)</span>
+                </button>
+
+                {/* 3. Download Vector PDF (.pdf) */}
+                <button
+                  onClick={handleDownloadVectorPdf}
+                  disabled={!vectorPdfBlobUrl}
+                  className="w-full py-2 px-4 rounded-xl border border-teal-300 bg-teal-50/60 hover:bg-teal-100 text-teal-800 text-xs font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-50 cursor-pointer"
+                >
+                  <FileText className="w-3.5 h-3.5 text-teal-600" />
+                  <span>Download Vector PDF (.pdf)</span>
+                </button>
+
+              </div>
+
+              {/* IP Printer Configuration Section */}
               <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <Wifi className="w-4 h-4 text-teal-600" />
-                    <span className="text-xs font-bold text-slate-800">IP Printer Configuration</span>
+                    <span className="text-xs font-bold text-slate-800">IP Thermal Printer</span>
                   </div>
                   <button
                     onClick={() => setShowPrinterSettings(!showPrinterSettings)}
-                    className="text-[11px] text-teal-600 hover:text-teal-800 font-medium"
+                    className="text-[11px] text-teal-600 hover:text-teal-800 font-medium cursor-pointer"
                   >
-                    {showPrinterSettings ? "Hide Settings" : "Edit IP"}
+                    {showPrinterSettings ? "Hide" : "Configure IP"}
                   </button>
                 </div>
 
@@ -610,7 +871,7 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
                   <div className="pt-2 border-t border-slate-100 space-y-3">
                     <div className="grid grid-cols-3 gap-2">
                       <div className="col-span-2">
-                        <label className="text-[10px] font-semibold text-slate-500 uppercase">Printer IP Address</label>
+                        <label className="text-[10px] font-semibold text-slate-500 uppercase">Printer IP</label>
                         <input
                           type="text"
                           value={printerIp}
@@ -630,9 +891,6 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
                         />
                       </div>
                     </div>
-                    <span className="text-[10px] text-slate-400 block">
-                      Saved in your browser storage automatically.
-                    </span>
                   </div>
                 ) : (
                   <div className="text-xs text-slate-600 flex items-center justify-between bg-slate-50 p-2.5 rounded-xl border border-slate-100">
@@ -640,52 +898,36 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
                     <span className="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-md font-semibold">Active</span>
                   </div>
                 )}
+
+                <div className="grid grid-cols-2 gap-2 pt-1">
+                  <button
+                    onClick={handlePrintIp}
+                    disabled={!croppedDataUrl || isPrinting}
+                    className="py-2 px-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-medium flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50 cursor-pointer"
+                  >
+                    <Wifi className="w-3.5 h-3.5 text-slate-500" />
+                    <span>Send to IP</span>
+                  </button>
+                  <button
+                    onClick={handleDirectWebUsb}
+                    disabled={!croppedDataUrl || isPrinting}
+                    className="py-2 px-2.5 rounded-xl bg-slate-50 hover:bg-slate-100 text-slate-600 text-xs font-medium flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50 cursor-pointer"
+                  >
+                    <Usb className="w-3.5 h-3.5 text-slate-400" />
+                    <span>WebUSB</span>
+                  </button>
+                </div>
               </div>
 
-              {/* Print Action Buttons */}
-              <div className="space-y-2.5 pt-2">
-                
-                {/* 1. Print to USB / Driver (Recommended) */}
-                <button
-                  onClick={handlePrintUsbDriver}
-                  disabled={!croppedDataUrl || isPrinting}
-                  className="w-full py-3 px-4 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold shadow-md hover:shadow-lg flex items-center justify-center gap-2 transition-all disabled:opacity-50"
-                >
-                  <Printer className="w-4 h-4" />
-                  <span>Print via USB Thermal Printer</span>
-                </button>
-
-                {/* 2. Direct IP Network Print */}
-                <button
-                  onClick={handlePrintIp}
-                  disabled={!croppedDataUrl || isPrinting}
-                  className="w-full py-2.5 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-sm flex items-center justify-center gap-2 transition-all disabled:opacity-50"
-                >
-                  <Wifi className="w-4 h-4 text-teal-400" />
-                  <span>Send to IP Printer ({printerIp})</span>
-                </button>
-
-                {/* 3. Direct WebUSB Connection */}
-                <button
-                  onClick={handleDirectWebUsb}
-                  disabled={!croppedDataUrl || isPrinting}
-                  className="w-full py-2 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
-                >
-                  <Usb className="w-3.5 h-3.5 text-slate-500" />
-                  <span>Direct WebUSB (Raw ESC/POS)</span>
-                </button>
-
-                {/* 4. Download Cropped Image */}
-                <button
-                  onClick={handleDownloadImage}
-                  disabled={!croppedDataUrl}
-                  className="w-full py-2 px-4 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-600 text-xs font-medium flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Download Cropped PNG</span>
-                </button>
-
-              </div>
+              {/* Secondary Download Option */}
+              <button
+                onClick={handleDownloadImage}
+                disabled={!croppedDataUrl}
+                className="w-full py-2 px-4 rounded-xl border border-dashed border-slate-200 hover:bg-slate-50 text-slate-500 text-xs font-medium flex items-center justify-center gap-2 transition-colors disabled:opacity-50 cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Download Cropped PNG Image</span>
+              </button>
 
             </div>
 
