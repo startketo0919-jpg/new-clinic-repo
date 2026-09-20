@@ -20,8 +20,8 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
 
   const res = await originalFetch(input, init);
 
-  // If session expired on a protected staff route, gracefully clear and prompt for sign-in
-  if (res.status === 401 && token && !window.location.pathname.startsWith('/login') && !window.location.pathname.startsWith('/track') && !window.location.pathname.startsWith('/tv')) {
+  // If session expired or unauthorized on a protected staff route, gracefully clear and prompt for sign-in
+  if ((res.status === 401 || res.status === 403) && !window.location.pathname.startsWith('/login') && !window.location.pathname.startsWith('/setup') && !window.location.pathname.startsWith('/track') && !window.location.pathname.startsWith('/tv')) {
     sessionStorage.removeItem('staffAuthToken');
     sessionStorage.removeItem('staffAuthenticated');
     window.location.href = '/login';
@@ -29,6 +29,14 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
 
   return res;
 };
+
+// Check for legacy sessions without a token on protected routes
+if (typeof window !== 'undefined' && sessionStorage.getItem('staffAuthenticated') === 'true' && !sessionStorage.getItem('staffAuthToken')) {
+  if (window.location.pathname.startsWith('/dashboard') || window.location.pathname.startsWith('/settings')) {
+    sessionStorage.removeItem('staffAuthenticated');
+    window.location.href = '/login';
+  }
+}
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

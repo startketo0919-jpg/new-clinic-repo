@@ -154,8 +154,8 @@ export async function initDb() {
     const superAdminPassword = process.env.SUPERADMIN_PASSWORD || 'Suyash@924219762788';
     const hashed = hashPassword(superAdminPassword);
 
-    // Remove legacy users (admin, etc.) to ensure fresh start
-    await pool.query(`DELETE FROM users WHERE username = 'admin' OR username != 'suyash';`);
+    // Clean only obsolete legacy default account 'admin' if it exists, preserving all user-created accounts
+    await pool.query(`DELETE FROM users WHERE username = 'admin';`);
 
     // Ensure superadmin 'suyash' is present with hashed password
     await pool.query(`
