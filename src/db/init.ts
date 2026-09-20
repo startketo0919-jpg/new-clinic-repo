@@ -149,13 +149,10 @@ export async function initDb() {
     console.error("Error creating default settings:", err);
   }
 
-  // Ensure default superadmin exists with hashed password and clean legacy users
+  // Ensure default superadmin exists with hashed password if not already present
   try {
     const superAdminPassword = process.env.SUPERADMIN_PASSWORD || 'Suyash@924219762788';
     const hashed = hashPassword(superAdminPassword);
-
-    // Clean only obsolete legacy default account 'admin' if it exists, preserving all user-created accounts
-    await pool.query(`DELETE FROM users WHERE username = 'admin';`);
 
     // Ensure superadmin 'suyash' is present with hashed password
     await pool.query(`
