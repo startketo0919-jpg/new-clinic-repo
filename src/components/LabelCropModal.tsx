@@ -54,6 +54,7 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
   
   // Printing status
   const [isPrinting, setIsPrinting] = useState(false);
+  const [showBridgeModal, setShowBridgeModal] = useState(false);
 
   // Save IP settings to localStorage whenever changed
   useEffect(() => {
@@ -541,20 +542,26 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
   };
 
   /**
-   * Generate ESC/POS byte commands matching PrinterHelper.kt printImage:
-   * 576 dots width, raster bit image GS v 0, luma < 200 threshold, 3 feeds, paper cut.
+   * Generate ESC/POS byte commands matching TVS RP 3230 & standard 80mm thermal receipt printers:
+   * 576 dots width (72mm printable width at 203 DPI), raster bit image GS v 0, high-contrast luma threshold, feeds, paper cut.
    */
-  const generateEscPosData = (): Uint8Array => {
-    const targetWidth = 576; // standard for 80mm ESC/POS
+  const generateEscPosData = async (): Promise<Uint8Array> => {
+    const targetWidth = 576; // Standard 80mm ESC/POS width
     const img = new Image();
-    img.src = croppedDataUrl!;
+    img.crossOrigin = "anonymous";
+
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = () => reject(new Error("Failed to load cropped label image"));
+      img.src = croppedDataUrl!;
+    });
 
     const canvas = document.createElement('canvas');
     canvas.width = targetWidth;
-    const scale = targetWidth / (cropDimensions?.width || targetWidth);
-    canvas.height = Math.round((cropDimensions?.height || targetWidth) * scale);
+    const aspect = (cropDimensions?.height || img.naturalHeight || targetWidth) / (cropDimensions?.width || img.naturalWidth || targetWidth);
+    canvas.height = Math.round(targetWidth * aspect);
 
-    const ctx = canvas.getContext('2d')!;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
@@ -565,17 +572,20 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
     const width = Math.floor((canvas.width + 7) / 8) * 8;
     const height = canvas.height;
 
-    // Header: ESC @ (init)
+    // Header: ESC @ (init printer)
     const initCmd = [0x1B, 0x40];
 
-    // GS v 0 header
+    // Left align: ESC a 0
+    const alignCmd = [0x1B, 0x61, 0x00];
+
+    // GS v 0 raster bit image header
     const xL = (width / 8) % 256;
     const xH = Math.floor((width / 8) / 256);
     const yL = height % 256;
     const yH = Math.floor(height / 256);
     const header = [0x1D, 0x76, 0x30, 0x00, xL, xH, yL, yH];
 
-    // Raster bytes
+    // Raster bytes with contrast threshold for crisp barcode scanning
     const rasterBytes: number[] = [];
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x += 8) {
@@ -588,7 +598,7 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
             const g = pixels[idx + 1];
             const bl = pixels[idx + 2];
             const luma = 0.299 * r + 0.587 * g + 0.114 * bl;
-            if (luma < 200) {
+            if (luma < 195) {
               byteVal |= (1 << (7 - b));
             }
           }
@@ -597,43 +607,60 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
       }
     }
 
-    // Line feed & Paper cut commands
-    const feeds = [0x0A, 0x0A, 0x0A];
+    // 4 blank line feeds + TVS Auto-Cut command (GS V B 0)
+    const feeds = [0x0A, 0x0A, 0x0A, 0x0A];
     const cutCmd = [0x1D, 0x56, 0x42, 0x00];
 
-    const fullBuffer = new Uint8Array([
+    return new Uint8Array([
       ...initCmd,
+      ...alignCmd,
       ...header,
       ...rasterBytes,
       ...feeds,
       ...cutCmd
     ]);
-
-    return fullBuffer;
   };
 
   /**
-   * Send ESC/POS data to IP Thermal Printer:
+   * Send ESC/POS data to IP Thermal Printer via Local Print Bridge:
    */
   const handlePrintIp = async () => {
     if (!croppedDataUrl) return;
     setIsPrinting(true);
-    setStatusMsg(`Connecting to IP printer at ${printerIp}:${printerPort}...`);
+    setStatusMsg(`Connecting to TVS Thermal Printer at ${printerIp}:${printerPort}...`);
 
     try {
-      const escposData = generateEscPosData();
+      const escposData = await generateEscPosData();
 
-      await fetch(`http://${printerIp}:${printerPort}`, {
+      // Convert Uint8Array to base64
+      let binary = '';
+      const len = escposData.byteLength;
+      for (let i = 0; i < len; i++) {
+        binary += String.fromCharCode(escposData[i]);
+      }
+      const base64Data = window.btoa(binary);
+
+      // Connect via Local Clinic Print Bridge (localhost:9101)
+      const res = await fetch('http://127.0.0.1:9101/print', {
         method: 'POST',
-        mode: 'no-cors',
-        body: escposData
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          printerIp,
+          printerPort: parseInt(printerPort, 10) || 9100,
+          escposBase64: base64Data
+        })
       });
 
-      setStatusMsg("Print command sent to IP printer!");
-      setTimeout(() => setStatusMsg(null), 3000);
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success) {
+        setStatusMsg("Success! Printed and cut by TVS thermal printer.");
+        setTimeout(() => setStatusMsg(null), 4000);
+      } else {
+        throw new Error(data.error || "Printer failed to respond");
+      }
     } catch (e: any) {
-      console.warn("Direct IP print:", e);
-      alert(`Could not establish raw TCP connection directly from browser to ${printerIp}:${printerPort}. \n\nPlease use "Print Vector PDF" to print with maximum crispness!`);
+      console.warn("Direct IP print bridge error:", e);
+      setShowBridgeModal(true);
     } finally {
       setIsPrinting(false);
     }
@@ -942,23 +969,32 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
                   </div>
                 )}
 
-                <div className="grid grid-cols-2 gap-2 pt-1">
+                <div className="space-y-2 pt-1">
                   <button
                     onClick={handlePrintIp}
                     disabled={!croppedDataUrl || isPrinting}
-                    className="py-2 px-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-medium flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50 cursor-pointer"
+                    className="w-full py-2.5 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-xs flex items-center justify-center gap-2 transition-all disabled:opacity-50 cursor-pointer"
                   >
-                    <Wifi className="w-3.5 h-3.5 text-slate-500" />
-                    <span>Send to IP</span>
+                    <Wifi className="w-3.5 h-3.5 text-indigo-200" />
+                    <span>Direct LAN Print (TVS Auto-Cut)</span>
                   </button>
-                  <button
-                    onClick={handleDirectWebUsb}
-                    disabled={!croppedDataUrl || isPrinting}
-                    className="py-2 px-2.5 rounded-xl bg-slate-50 hover:bg-slate-100 text-slate-600 text-xs font-medium flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50 cursor-pointer"
-                  >
-                    <Usb className="w-3.5 h-3.5 text-slate-400" />
-                    <span>WebUSB</span>
-                  </button>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      onClick={() => setShowBridgeModal(true)}
+                      className="py-1.5 px-2 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-600 text-[11px] font-medium flex items-center justify-center gap-1 cursor-pointer"
+                    >
+                      <Download className="w-3 h-3 text-slate-400" />
+                      <span>Get Print Bridge</span>
+                    </button>
+                    <button
+                      onClick={handleDirectWebUsb}
+                      disabled={!croppedDataUrl || isPrinting}
+                      className="py-1.5 px-2 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-600 text-[11px] font-medium flex items-center justify-center gap-1 transition-colors disabled:opacity-50 cursor-pointer"
+                    >
+                      <Usb className="w-3 h-3 text-slate-400" />
+                      <span>WebUSB</span>
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -977,6 +1013,51 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
           </div>
 
         </div>
+
+        {/* Bridge Setup Guide Modal */}
+        {showBridgeModal && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+            <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl border border-slate-100">
+              <div className="flex items-center gap-3 text-indigo-600 mb-3">
+                <Printer className="w-6 h-6" />
+                <h3 className="font-bold text-slate-800 text-base">Start TVS Print Bridge</h3>
+              </div>
+              <p className="text-slate-600 text-xs leading-relaxed mb-4">
+                To enable <strong>instant 1-click silent printing</strong> and fire the cutter blade on your LAN thermal printer (<span className="font-mono font-semibold text-slate-800">{printerIp}:{printerPort}</span>), the lightweight TVS Print Bridge must be running on this PC.
+              </p>
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 text-xs text-slate-700 space-y-2.5 mb-5">
+                <div className="flex items-start gap-2.5">
+                  <span className="w-5 h-5 shrink-0 rounded-full bg-indigo-600 text-white font-bold text-[11px] flex items-center justify-center mt-0.5">1</span>
+                  <span>Click <strong>Download TVS Bridge</strong> below and save <code className="bg-slate-200 px-1 py-0.5 rounded font-mono text-[10px]">TVS-Print-Bridge.bat</code> on your PC.</span>
+                </div>
+                <div className="flex items-start gap-2.5">
+                  <span className="w-5 h-5 shrink-0 rounded-full bg-indigo-600 text-white font-bold text-[11px] flex items-center justify-center mt-0.5">2</span>
+                  <span>Double-click to open it (keep the small black window open in background).</span>
+                </div>
+                <div className="flex items-start gap-2.5">
+                  <span className="w-5 h-5 shrink-0 rounded-full bg-indigo-600 text-white font-bold text-[11px] flex items-center justify-center mt-0.5">3</span>
+                  <span>Click <strong>Direct LAN Print</strong> anytime for instant silent printing with auto-cut!</span>
+                </div>
+              </div>
+              <div className="flex items-center justify-end gap-3">
+                <button
+                  onClick={() => setShowBridgeModal(false)}
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl cursor-pointer"
+                >
+                  Close
+                </button>
+                <a
+                  href="/TVS-Print-Bridge.bat"
+                  download="TVS-Print-Bridge.bat"
+                  className="px-4 py-2 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl shadow-sm flex items-center gap-2 cursor-pointer"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>Download TVS Bridge (.bat)</span>
+                </a>
+              </div>
+            </div>
+          </div>
+        )}
 
       </div>
     </div>
