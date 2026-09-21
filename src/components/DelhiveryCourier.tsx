@@ -637,7 +637,15 @@ export default function DelhiveryCourier({ prefillData }: DelhiveryCourierProps 
               </div>
 
               <div className="bg-slate-50 rounded-xl p-5 border border-slate-100">
-                <h3 className="font-bold text-slate-700 mb-4">Shipping Rates</h3>
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="font-bold text-slate-700">Shipping Rates</h3>
+                  {rates && (
+                    <button onClick={fetchRates} disabled={isFetchingRates} className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 bg-indigo-50 px-3 py-1.5 rounded-lg border border-indigo-100 transition-colors">
+                      <RefreshCw className={`w-3.5 h-3.5 ${isFetchingRates ? 'animate-spin' : ''}`} />
+                      {isFetchingRates ? 'Refreshing...' : 'Refresh Rates'}
+                    </button>
+                  )}
+                </div>
                 {!rates ? (
                   <button onClick={fetchRates} disabled={isFetchingRates} className="w-full py-3 bg-indigo-100 text-indigo-700 hover:bg-indigo-200 rounded-xl font-semibold transition-colors flex items-center justify-center gap-2">
                     {isFetchingRates ? 'Fetching...' : 'Fetch Rates (Express & Surface)'}

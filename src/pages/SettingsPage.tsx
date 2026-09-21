@@ -9,8 +9,8 @@ export default function SettingsPage() {
   const navigate = useNavigate();
   
   const [activeTab, setActiveTab] = useState<string>('general');
-  const [showDelhiveryPassword, setShowDelhiveryPassword] = useState(false);
-  const [delhiveryPasswordInput, setDelhiveryPasswordInput] = useState('');
+  const [showDelhiveryUnlocked, setShowDelhiveryUnlocked] = useState(false);
+  const [delhiveryConfirmInput, setDelhiveryConfirmInput] = useState('');
   const [newWarehouseName, setNewWarehouseName] = useState('');
   const [newWarehousePincode, setNewWarehousePincode] = useState('');
   const [userRole, setUserRole] = useState<string | null>(null);
@@ -406,23 +406,22 @@ export default function SettingsPage() {
     <div className="space-y-6">
       <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
         <label className="block text-sm font-semibold text-slate-700 mb-2">Live API Token</label>
-        {!showDelhiveryPassword ? (
+        {!showDelhiveryUnlocked ? (
            <div className="flex gap-2">
-             <input type="password" placeholder="Enter admin password to view/edit" className="flex-1 px-4 py-2 border rounded-lg text-sm" value={delhiveryPasswordInput} onChange={e => setDelhiveryPasswordInput(e.target.value)} />
+             <input type="text" placeholder='Type "CHANGE" to unlock' className="flex-1 px-4 py-2 border rounded-lg text-sm" value={delhiveryConfirmInput} onChange={e => setDelhiveryConfirmInput(e.target.value)} />
              <button onClick={() => {
-                const adminUser = state.users.find(u => u.username === 'admin');
-                if (adminUser && adminUser.passwordHash === delhiveryPasswordInput) {
-                  setShowDelhiveryPassword(true);
-                  setDelhiveryPasswordInput('');
+                if (delhiveryConfirmInput.trim().toUpperCase() === 'CHANGE') {
+                  setShowDelhiveryUnlocked(true);
+                  setDelhiveryConfirmInput('');
                 } else {
-                  alert('Incorrect Admin Password');
+                  alert('Please type "CHANGE" to unlock this setting.');
                 }
-             }} className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700">Authenticate</button>
+             }} className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700">Unlock</button>
            </div>
         ) : (
            <div className="flex gap-2">
              <input type="text" value={state.settings.delhiveryApiKey || ''} onChange={e => updateSettings({ delhiveryApiKey: e.target.value })} className="flex-1 px-4 py-2 border rounded-lg text-sm" placeholder="Enter Delhivery Live API Token" />
-             <button onClick={() => { setShowDelhiveryPassword(false); }} className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700">Save</button>
+             <button onClick={() => { setShowDelhiveryUnlocked(false); }} className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700">Save</button>
            </div>
         )}
       </div>
