@@ -32,7 +32,7 @@ interface ClinicContextType {
   updateSettings: (settings: Partial<ClinicState['settings']>) => void;
   updateTemplates: (templates: WhatsAppTemplate[]) => Promise<void>;
   sendWhatsAppMessage: (phone: string, content: string, templateName?: string, templateLanguage?: string, templateComponents?: any[]) => Promise<void>;
-  resetDatabase: (adminPass: string) => boolean;
+  resetDatabase: (adminPass: string) => Promise<{ success: boolean; error?: string }>;
   markShipmentStatus: (id: string, status: 'Pending' | 'Completed') => Promise<void>;
   deleteShipment: (id: string) => Promise<void>;
   nextSequence: number;
@@ -617,15 +617,33 @@ export function ClinicProvider({ children }: { children: React.ReactNode }) {
     dispatchAction('UPDATE_SETTINGS', settings);
   };
 
-  const resetDatabase = (adminPass: string) => {
-    const admin = state.users.find(u => u.role === 'admin');
-    if (admin && admin.passwordHash === adminPass) {
-      setState(prev => ({ ...prev, patients: [], patientRegistry: [], appointments: [],
-    messages: [], currentPatientId: null }));
-      dispatchAction('RESET_DB', {});
-      return true;
+  const resetDatabase = async (adminPass: string): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const res = await fetch('/api/action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'RESET_DB',
+          payload: { adminPass }
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success) {
+        setState(prev => ({
+          ...prev,
+          patients: [],
+          patientRegistry: [],
+          appointments: [],
+          messages: [],
+          currentPatientId: null
+        }));
+        return { success: true };
+      } else {
+        return { success: false, error: data.error || 'Incorrect Admin Password!' };
+      }
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Server connection error' };
     }
-    return false;
   };
 
   const markShipmentStatus = async (id: string, status: 'Pending' | 'Completed') => {

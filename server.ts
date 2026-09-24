@@ -927,10 +927,22 @@ app.post("/api/action", optionalAuth, async (req: AuthRequest, res) => {
         }
       }
       else if (type === 'RESET_DB') {
-         await db.delete(liveQueue);
-         await db.delete(patientRegistry);
-         await db.delete(appointments);
-         await db.update(settings).set({ currentPatientId: null, nextSequence: 1 }).where(eq(settings.id, "default"));
+        const { adminPass } = payload || {};
+        if (!adminPass) {
+          return res.status(400).json({ error: "Admin password is required." });
+        }
+
+        // Find admin user in database to verify password
+        const adminUsers = await db.select().from(users).where(eq(users.role, 'admin')).limit(1);
+        const admin = adminUsers[0];
+        if (!admin || !verifyPassword(adminPass, admin.passwordHash)) {
+          return res.status(401).json({ error: "Incorrect Admin Password!" });
+        }
+
+        await db.delete(liveQueue);
+        await db.delete(patientRegistry);
+        await db.delete(appointments);
+        await db.update(settings).set({ currentPatientId: null, nextSequence: 1 }).where(eq(settings.id, "default"));
       }
 
       notifyClients();

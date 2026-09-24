@@ -69,13 +69,14 @@ export default function SettingsPage() {
     setUnlockWa('');
   };
 
-  const handleResetDB = () => {
+  const handleResetDB = async () => {
     if (window.confirm("Are you sure? This deletes ALL patients and history.")) {
-      if (resetDatabase(adminPass)) {
+      const result = await resetDatabase(adminPass);
+      if (result.success) {
         alert("Database Reset Successfully");
         setAdminPass('');
       } else {
-        alert("Incorrect Admin Password!");
+        alert(result.error || "Incorrect Admin Password!");
       }
     }
   };
