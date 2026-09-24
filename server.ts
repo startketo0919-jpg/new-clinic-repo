@@ -1534,7 +1534,131 @@ app.post("/api/action", optionalAuth, async (req: AuthRequest, res) => {
       res.status(500).json({ error: e.message });
     }
   });
-  
+
+  // --- CLOUD PRINT RELAY QUEUE (Mobile 1-Click Printing) ---
+  interface CloudPrintJob {
+    id: string;
+    printerIp: string;
+    printerPort: number;
+    escposBase64: string;
+    title?: string;
+    status: 'pending' | 'printed' | 'failed';
+    error?: string;
+    createdAt: number;
+    completedAt?: number;
+  }
+
+  const printJobsQueue: CloudPrintJob[] = [];
+  let lastBridgeHeartbeat = 0;
+  const PRINT_BRIDGE_KEY = process.env.PRINT_BRIDGE_KEY || 'clinic-tvs-bridge-key-9100';
+
+  // 1. Post a print job (from mobile or web client)
+  app.post('/api/print-jobs', requireStaffAuth, (req, res) => {
+    try {
+      const { printerIp, printerPort, escposBase64, title } = req.body;
+      if (!escposBase64) {
+        return res.status(400).json({ error: 'Missing escposBase64 print data' });
+      }
+
+      const job: CloudPrintJob = {
+        id: `job_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        printerIp: printerIp || '192.168.29.2',
+        printerPort: parseInt(printerPort, 10) || 9100,
+        escposBase64,
+        title: title || 'Mobile Label Print',
+        status: 'pending',
+        createdAt: Date.now()
+      };
+
+      printJobsQueue.push(job);
+      if (printJobsQueue.length > 50) {
+        printJobsQueue.shift();
+      }
+
+      const isBridgeOnline = (Date.now() - lastBridgeHeartbeat) < 15000;
+      res.json({
+        success: true,
+        jobId: job.id,
+        bridgeOnline: isBridgeOnline,
+        message: 'Print job queued for clinic printer'
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // 2. Poll for pending print jobs (called by clinic PC bridge)
+  app.get('/api/print-jobs/poll', (req, res) => {
+    const key = req.query.key as string;
+    if (key !== PRINT_BRIDGE_KEY) {
+      return res.status(401).json({ error: 'Invalid bridge key' });
+    }
+
+    lastBridgeHeartbeat = Date.now();
+
+    const pendingJob = printJobsQueue.find(j => j.status === 'pending');
+    if (pendingJob) {
+      return res.json({
+        hasJob: true,
+        job: {
+          id: pendingJob.id,
+          printerIp: pendingJob.printerIp,
+          printerPort: pendingJob.printerPort,
+          escposBase64: pendingJob.escposBase64,
+          title: pendingJob.title
+        }
+      });
+    }
+
+    res.json({ hasJob: false });
+  });
+
+  // 3. Mark job complete or failed (called by clinic PC bridge)
+  app.post('/api/print-jobs/:id/complete', (req, res) => {
+    const key = req.query.key as string;
+    if (key !== PRINT_BRIDGE_KEY) {
+      return res.status(401).json({ error: 'Invalid bridge key' });
+    }
+
+    const { id } = req.params;
+    const { success, error } = req.body;
+    const job = printJobsQueue.find(j => j.id === id);
+    if (job) {
+      job.status = success ? 'printed' : 'failed';
+      job.error = error;
+      job.completedAt = Date.now();
+    }
+
+    res.json({ success: true });
+  });
+
+  // 4. Status check for specific print job
+  app.get('/api/print-jobs/status/:id', requireStaffAuth, (req, res) => {
+    const { id } = req.params;
+    const job = printJobsQueue.find(j => j.id === id);
+    const isBridgeOnline = (Date.now() - lastBridgeHeartbeat) < 15000;
+
+    if (!job) {
+      return res.json({ status: 'unknown', bridgeOnline: isBridgeOnline });
+    }
+
+    res.json({
+      id: job.id,
+      status: job.status,
+      error: job.error,
+      bridgeOnline: isBridgeOnline
+    });
+  });
+
+  // 5. Get bridge health status
+  app.get('/api/print-jobs/bridge-health', requireStaffAuth, (req, res) => {
+    const isBridgeOnline = (Date.now() - lastBridgeHeartbeat) < 15000;
+    res.json({
+      bridgeOnline: isBridgeOnline,
+      lastSeenSecondsAgo: lastBridgeHeartbeat > 0 ? Math.round((Date.now() - lastBridgeHeartbeat) / 1000) : null
+    });
+  });
+
 
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({ server: { middlewareMode: true }, appType: "spa" });

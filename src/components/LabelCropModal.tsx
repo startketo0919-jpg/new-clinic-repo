@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   X, Printer, Usb, Wifi, Crop, Download, RefreshCw, 
-  CheckCircle2, AlertCircle, FileText, ExternalLink 
+  CheckCircle2, AlertCircle, FileText, ExternalLink, Smartphone 
 } from 'lucide-react';
 
 interface LabelCropModalProps {
@@ -55,6 +55,22 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
   // Printing status
   const [isPrinting, setIsPrinting] = useState(false);
   const [showBridgeModal, setShowBridgeModal] = useState(false);
+  const [bridgeStatus, setBridgeStatus] = useState<'checking' | 'online' | 'offline'>('checking');
+
+  // Check bridge online status
+  const checkBridgeHealth = async () => {
+    try {
+      const res = await fetch('/api/print-jobs/bridge-health');
+      if (res.ok) {
+        const data = await res.json();
+        setBridgeStatus(data.bridgeOnline ? 'online' : 'offline');
+      } else {
+        setBridgeStatus('offline');
+      }
+    } catch {
+      setBridgeStatus('offline');
+    }
+  };
 
   // Save IP settings to localStorage whenever changed
   useEffect(() => {
@@ -65,6 +81,7 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
   // Load / cleanup when modal opened or closed
   useEffect(() => {
     if (isOpen) {
+      checkBridgeHealth();
       if (initialAwb) {
         setAwbInput(initialAwb);
         fetchLabelByAwb(initialAwb);
@@ -666,6 +683,96 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
     }
   };
 
+  /**
+   * Send ESC/POS data to Clinic IP Printer via Cloud Relay (for Mobile / Remote printing)
+   */
+  const handlePrintMobileCloud = async () => {
+    if (!croppedDataUrl) return;
+    setIsPrinting(true);
+    setError(null);
+    setStatusMsg("Sending label to clinic printer queue...");
+
+    try {
+      const escposData = await generateEscPosData();
+
+      // Convert Uint8Array to base64
+      let binary = '';
+      const len = escposData.byteLength;
+      for (let i = 0; i < len; i++) {
+        binary += String.fromCharCode(escposData[i]);
+      }
+      const base64Data = window.btoa(binary);
+
+      // Post to Cloud Print Queue
+      const res = await fetch('/api/print-jobs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          printerIp,
+          printerPort: parseInt(printerPort, 10) || 9100,
+          escposBase64: base64Data,
+          title: `Label AWB ${awbInput || 'Package'}`
+        })
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to enqueue print job");
+      }
+
+      setBridgeStatus(data.bridgeOnline ? 'online' : 'offline');
+
+      if (!data.bridgeOnline) {
+        setStatusMsg("Job queued! Clinic PC bridge appears offline — label will automatically print as soon as clinic PC bridge is opened.");
+        setTimeout(() => setStatusMsg(null), 6000);
+        setIsPrinting(false);
+        return;
+      }
+
+      setStatusMsg("Sent to clinic! Waiting for thermal printer to print & cut...");
+
+      // Poll job status for up to 10 seconds
+      const jobId = data.jobId;
+      let checks = 0;
+      const pollTimer = setInterval(async () => {
+        checks++;
+        try {
+          const sRes = await fetch(`/api/print-jobs/status/${jobId}`);
+          if (sRes.ok) {
+            const sData = await sRes.json();
+            if (sData.status === 'printed') {
+              clearInterval(pollTimer);
+              setStatusMsg("Success! Printed and cut by TVS thermal printer at clinic.");
+              setTimeout(() => setStatusMsg(null), 5000);
+              setIsPrinting(false);
+              return;
+            } else if (sData.status === 'failed') {
+              clearInterval(pollTimer);
+              setError(`Printer error: ${sData.error || 'Failed to print'}`);
+              setStatusMsg(null);
+              setIsPrinting(false);
+              return;
+            }
+          }
+        } catch {
+          // ignore
+        }
+
+        if (checks >= 6) {
+          clearInterval(pollTimer);
+          setStatusMsg("Print job sent to clinic queue! Please check printer.");
+          setTimeout(() => setStatusMsg(null), 4000);
+          setIsPrinting(false);
+        }
+      }, 1500);
+
+    } catch (e: any) {
+      console.warn("Mobile cloud print error:", e);
+      setError(`Mobile print error: ${e.message}`);
+      setIsPrinting(false);
+    }
+  };
+
   const handleDownloadImage = () => {
     if (!croppedDataUrl) return;
     const a = document.createElement('a');
@@ -965,18 +1072,34 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
                 ) : (
                   <div className="text-xs text-slate-600 flex items-center justify-between bg-slate-50 p-2.5 rounded-xl border border-slate-100">
                     <span className="font-mono text-slate-800">{printerIp}:{printerPort}</span>
-                    <span className="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-md font-semibold">Active</span>
+                    <div className="flex items-center gap-1.5">
+                      <span className={`w-2 h-2 rounded-full ${bridgeStatus === 'online' ? 'bg-emerald-500 animate-pulse' : 'bg-amber-400'}`} />
+                      <span className={`text-[10px] px-2 py-0.5 rounded-md font-semibold ${bridgeStatus === 'online' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-700'}`}>
+                        {bridgeStatus === 'online' ? 'PC Bridge Online' : bridgeStatus === 'checking' ? 'Checking...' : 'Bridge Ready'}
+                      </span>
+                    </div>
                   </div>
                 )}
 
                 <div className="space-y-2 pt-1">
+                  {/* 1. Direct LAN Print (For Clinic PC) */}
                   <button
                     onClick={handlePrintIp}
                     disabled={!croppedDataUrl || isPrinting}
                     className="w-full py-2.5 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-xs flex items-center justify-center gap-2 transition-all disabled:opacity-50 cursor-pointer"
                   >
                     <Wifi className="w-3.5 h-3.5 text-indigo-200" />
-                    <span>Direct LAN Print (TVS Auto-Cut)</span>
+                    <span>Direct LAN Print (This PC)</span>
+                  </button>
+
+                  {/* 2. Mobile 1-Click Print (Cloud Relay) */}
+                  <button
+                    onClick={handlePrintMobileCloud}
+                    disabled={!croppedDataUrl || isPrinting}
+                    className="w-full py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs flex items-center justify-center gap-2 transition-all disabled:opacity-50 cursor-pointer"
+                  >
+                    <Smartphone className="w-3.5 h-3.5 text-emerald-200" />
+                    <span>Print from Mobile (1-Click Cloud)</span>
                   </button>
                   <div className="grid grid-cols-2 gap-2">
                     <button

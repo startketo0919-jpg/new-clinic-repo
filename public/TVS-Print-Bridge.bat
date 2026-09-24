@@ -1,12 +1,12 @@
 @echo off
-title TVS-E RP 3230 Thermal Printer Bridge
+title TVS-E RP 3230 Thermal Printer Bridge (PC & Mobile)
 color 0A
 echo ========================================================
 echo   Krishna Homoeopathic Clinic - TVS Printer Bridge
 echo ========================================================
 echo.
-echo Starting local print bridge on port 9101...
-echo This connects your web browser directly to the LAN printer (192.168.29.2).
+echo Starting print bridge on port 9101 and cloud queue...
+echo This connects both your PC and Mobile directly to the LAN printer (192.168.29.2).
 echo.
 echo DO NOT CLOSE THIS WINDOW WHILE USING DIRECT PRINTING.
 echo.
