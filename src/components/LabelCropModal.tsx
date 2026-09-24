@@ -729,7 +729,7 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
         return;
       }
 
-      setStatusMsg("Sent to clinic! Waiting for thermal printer to print & cut...");
+      setStatusMsg(data.instantPushed ? "Pushed instantly to clinic printer! Printing & cutting..." : "Sent to clinic! Waiting for thermal printer to print & cut...");
 
       // Poll job status for up to 10 seconds
       const jobId = data.jobId;

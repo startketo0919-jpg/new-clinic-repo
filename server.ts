@@ -1535,7 +1535,7 @@ app.post("/api/action", optionalAuth, async (req: AuthRequest, res) => {
     }
   });
 
-  // --- CLOUD PRINT RELAY QUEUE (Mobile 1-Click Printing) ---
+  // --- CLOUD PRINT RELAY QUEUE (Instant SSE Push Webhook) ---
   interface CloudPrintJob {
     id: string;
     printerIp: string;
@@ -1549,6 +1549,7 @@ app.post("/api/action", optionalAuth, async (req: AuthRequest, res) => {
   }
 
   const printJobsQueue: CloudPrintJob[] = [];
+  let bridgeClients: express.Response[] = [];
   let lastBridgeHeartbeat = 0;
   const PRINT_BRIDGE_KEY = process.env.PRINT_BRIDGE_KEY || 'clinic-tvs-bridge-key-9100';
 
@@ -1575,19 +1576,94 @@ app.post("/api/action", optionalAuth, async (req: AuthRequest, res) => {
         printJobsQueue.shift();
       }
 
-      const isBridgeOnline = (Date.now() - lastBridgeHeartbeat) < 15000;
+      // INSTANT ZERO-LATENCY PUSH to connected clinic PC bridge stream!
+      const isStreamConnected = bridgeClients.length > 0;
+      if (isStreamConnected) {
+        const payload = JSON.stringify({
+          type: 'print_job',
+          job: {
+            id: job.id,
+            printerIp: job.printerIp,
+            printerPort: job.printerPort,
+            escposBase64: job.escposBase64,
+            title: job.title
+          }
+        });
+        bridgeClients.forEach(client => {
+          try {
+            client.write(`data: ${payload}\n\n`);
+          } catch (pushErr) {
+            console.warn('[PrintBridge] Error pushing job to client:', pushErr);
+          }
+        });
+      }
+
+      const isBridgeOnline = isStreamConnected || (Date.now() - lastBridgeHeartbeat) < 35000;
       res.json({
         success: true,
         jobId: job.id,
         bridgeOnline: isBridgeOnline,
-        message: 'Print job queued for clinic printer'
+        instantPushed: isStreamConnected,
+        message: isStreamConnected ? 'Print job pushed instantly to clinic printer' : 'Print job queued (bridge waiting)'
       });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
   });
 
-  // 2. Poll for pending print jobs (called by clinic PC bridge)
+  // 2. Persistent Event Stream (SSE) for instant real-time push to clinic PC bridge
+  app.get('/api/print-jobs/stream', (req, res) => {
+    const key = req.query.key as string;
+    if (key !== PRINT_BRIDGE_KEY) {
+      return res.status(401).json({ error: 'Invalid bridge key' });
+    }
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+
+    bridgeClients.push(res);
+    lastBridgeHeartbeat = Date.now();
+    console.log('[PrintBridge] Clinic PC connected to instant push stream');
+
+    // Send connection established event
+    res.write(`data: ${JSON.stringify({ type: 'connected', message: 'Print bridge push channel active' })}\n\n`);
+
+    // Check if any jobs were queued while bridge was connecting
+    const pendingJobs = printJobsQueue.filter(j => j.status === 'pending');
+    for (const pJob of pendingJobs) {
+      const payload = JSON.stringify({
+        type: 'print_job',
+        job: {
+          id: pJob.id,
+          printerIp: pJob.printerIp,
+          printerPort: pJob.printerPort,
+          escposBase64: pJob.escposBase64,
+          title: pJob.title
+        }
+      });
+      res.write(`data: ${payload}\n\n`);
+    }
+
+    // Keepalive ping every 25 seconds
+    const keepaliveTimer = setInterval(() => {
+      lastBridgeHeartbeat = Date.now();
+      try {
+        res.write(`: keepalive\n\n`);
+      } catch {
+        clearInterval(keepaliveTimer);
+      }
+    }, 25000);
+
+    req.on('close', () => {
+      clearInterval(keepaliveTimer);
+      bridgeClients = bridgeClients.filter(c => c !== res);
+      console.log('[PrintBridge] Clinic PC push stream disconnected');
+    });
+  });
+
+  // 3. Fallback Poll endpoint (called by bridge if stream reconnecting)
   app.get('/api/print-jobs/poll', (req, res) => {
     const key = req.query.key as string;
     if (key !== PRINT_BRIDGE_KEY) {
@@ -1613,7 +1689,7 @@ app.post("/api/action", optionalAuth, async (req: AuthRequest, res) => {
     res.json({ hasJob: false });
   });
 
-  // 3. Mark job complete or failed (called by clinic PC bridge)
+  // 4. Mark job complete or failed (called by clinic PC bridge)
   app.post('/api/print-jobs/:id/complete', (req, res) => {
     const key = req.query.key as string;
     if (key !== PRINT_BRIDGE_KEY) {
@@ -1632,11 +1708,11 @@ app.post("/api/action", optionalAuth, async (req: AuthRequest, res) => {
     res.json({ success: true });
   });
 
-  // 4. Status check for specific print job
+  // 5. Status check for specific print job
   app.get('/api/print-jobs/status/:id', requireStaffAuth, (req, res) => {
     const { id } = req.params;
     const job = printJobsQueue.find(j => j.id === id);
-    const isBridgeOnline = (Date.now() - lastBridgeHeartbeat) < 15000;
+    const isBridgeOnline = bridgeClients.length > 0 || (Date.now() - lastBridgeHeartbeat) < 35000;
 
     if (!job) {
       return res.json({ status: 'unknown', bridgeOnline: isBridgeOnline });
@@ -1650,11 +1726,12 @@ app.post("/api/action", optionalAuth, async (req: AuthRequest, res) => {
     });
   });
 
-  // 5. Get bridge health status
+  // 6. Get bridge health status
   app.get('/api/print-jobs/bridge-health', requireStaffAuth, (req, res) => {
-    const isBridgeOnline = (Date.now() - lastBridgeHeartbeat) < 15000;
+    const isBridgeOnline = bridgeClients.length > 0 || (Date.now() - lastBridgeHeartbeat) < 35000;
     res.json({
       bridgeOnline: isBridgeOnline,
+      activePushStreams: bridgeClients.length,
       lastSeenSecondsAgo: lastBridgeHeartbeat > 0 ? Math.round((Date.now() - lastBridgeHeartbeat) / 1000) : null
     });
   });
