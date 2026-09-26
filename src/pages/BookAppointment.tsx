@@ -5,7 +5,8 @@ import {
   Stethoscope, User, Calendar, CreditCard, CheckCircle2, 
   Upload, X, ChevronRight, ChevronLeft, Video, 
   Phone, History, FileText, MapPin, Truck, IndianRupee,
-  CalendarDays, Clock, Download, ExternalLink, RefreshCw, AlertCircle
+  CalendarDays, Clock, Download, ExternalLink, RefreshCw, AlertCircle,
+  Lock, Sparkles, UserPlus
 } from 'lucide-react';
 import { format, addDays, isBefore, isSameDay, getDay, parseISO } from 'date-fns';
 
@@ -18,6 +19,9 @@ interface FormData {
   pid?: string;
   shortAddress: string;
   lastVisitDate: string;
+  
+  isSameConcern?: boolean;
+  isBookingForDifferentPerson?: boolean;
   
   healthConcern: string;
   healthConcernOther: string;
@@ -54,6 +58,9 @@ export default function BookAppointment() {
     pid: '',
     shortAddress: '',
     lastVisitDate: '',
+    
+    isSameConcern: true,
+    isBookingForDifferentPerson: false,
     
     healthConcern: '',
     healthConcernOther: '',
@@ -98,6 +105,10 @@ export default function BookAppointment() {
     calculatedFee: number;
     isFree: boolean;
     clinicId?: string | null;
+    lastHealthConcern?: string | null;
+    lastHealthConcernDetail?: string | null;
+    lastVisitDate?: string | null;
+    lastPatientName?: string | null;
     activeAppointment?: {
       id: string;
       patientName: string;
@@ -111,6 +122,8 @@ export default function BookAppointment() {
       status: string;
       meetLink?: string;
     } | null;
+    activeAppointments?: any[];
+    hasActiveForSameName?: boolean;
   }>({
     normalFee: 199,
     followUpFee: 0,
@@ -119,7 +132,13 @@ export default function BookAppointment() {
     calculatedFee: 199,
     isFree: false,
     clinicId: null,
-    activeAppointment: null
+    lastHealthConcern: null,
+    lastHealthConcernDetail: null,
+    lastVisitDate: null,
+    lastPatientName: null,
+    activeAppointment: null,
+    activeAppointments: [],
+    hasActiveForSameName: false
   });
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -163,12 +182,13 @@ export default function BookAppointment() {
     }
   };
 
-  // Fetch dynamic pricing and active appointment status whenever phone, pid, or lastVisitDate changes
+  // Fetch dynamic pricing and active appointment status whenever phone, patientName, pid, or lastVisitDate changes
   useEffect(() => {
     const fetchConfig = async () => {
       try {
         const query = new URLSearchParams();
         if (formData.phone && formData.phone.length === 10) query.set('phone', formData.phone);
+        if (formData.patientName) query.set('name', formData.patientName);
         if (formData.pid) query.set('pid', formData.pid);
         if (formData.lastVisitDate) query.set('lastVisitDate', formData.lastVisitDate);
         const res = await fetch(`/api/appointments/config?${query.toString()}`);
@@ -178,13 +198,20 @@ export default function BookAppointment() {
           if (data.clinicId && !formData.pid) {
             updateForm('pid', data.clinicId);
           }
+          // If in follow-up window and concern is not yet filled, prefill with previous concern
+          if (data.isFollowUp && data.lastHealthConcern && !formData.healthConcern && formData.isSameConcern !== false) {
+            updateForm('healthConcern', data.lastHealthConcern);
+            if (data.lastHealthConcernDetail) {
+              updateForm('healthConcernOther', data.lastHealthConcernDetail);
+            }
+          }
         }
       } catch (e) {
         console.error('Failed to load pricing config:', e);
       }
     };
     fetchConfig();
-  }, [formData.phone, formData.pid, formData.lastVisitDate, formData.isExisting]);
+  }, [formData.phone, formData.patientName, formData.pid, formData.lastVisitDate, formData.isExisting]);
 
   const nextStep = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -226,9 +253,24 @@ export default function BookAppointment() {
     if (!formData.patientName.trim()) return 'Patient Name is required';
     if (!formData.phone.match(/^[6-9]\d{9}$/)) return 'Valid 10-digit mobile number required';
     if (!formData.email.match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)) return 'Valid email required';
-    if (pricingConfig.activeAppointment) {
-      return 'You already have an active appointment scheduled. Each patient is limited to one active appointment at a time. Please reschedule instead.';
+    
+    // Check if an active appointment already exists on this number
+    const activeAppts = pricingConfig.activeAppointments && pricingConfig.activeAppointments.length > 0
+      ? pricingConfig.activeAppointments
+      : (pricingConfig.activeAppointment ? [pricingConfig.activeAppointment] : []);
+
+    if (activeAppts.length > 0) {
+      const trimmedName = formData.patientName.trim().toLowerCase();
+      const existingMatch = activeAppts.find((a: any) => (a.patient_name || a.patientName || '').trim().toLowerCase() === trimmedName);
+      
+      if (existingMatch) {
+        return `An active appointment already exists for "${existingMatch.patient_name || existingMatch.patientName}". Each patient is limited to one active appointment at a time. Please reschedule instead, or select "Book for Another Person" and enter a different name.`;
+      }
+      if (!formData.isBookingForDifferentPerson) {
+        return `An active appointment exists on this number for "${activeAppts[0].patient_name || activeAppts[0].patientName}". Please choose whether to reschedule or select "Book for Another Person" below.`;
+      }
     }
+
     if (formData.isExisting) {
       if (!formData.shortAddress.trim()) return 'Address is required for existing patients';
     }
@@ -307,9 +349,11 @@ export default function BookAppointment() {
   // -------------------------------------------------------------
   // STEP 3 HANDLERS
   // -------------------------------------------------------------
-  const isFollowUp = pricingConfig.isFollowUp || (formData.isExisting && formData.lastVisitDate && 
-    (new Date().getTime() - new Date(formData.lastVisitDate).getTime()) < (pricingConfig.followUpDays * 24 * 60 * 60 * 1000));
+  const isEligibleFollowUp = (pricingConfig.isFollowUp || (formData.isExisting && formData.lastVisitDate && 
+    (new Date().getTime() - new Date(formData.lastVisitDate).getTime()) < (pricingConfig.followUpDays * 24 * 60 * 60 * 1000)))
+    && !formData.isBookingForDifferentPerson;
   
+  const isFollowUp = isEligibleFollowUp && formData.isSameConcern !== false;
   const effectiveFee = isFollowUp ? pricingConfig.followUpFee : pricingConfig.normalFee;
   const isFree = isFollowUp && pricingConfig.followUpFee === 0;
 
@@ -330,6 +374,7 @@ export default function BookAppointment() {
           shortAddress: formData.shortAddress,
           lastVisitDate: formData.lastVisitDate,
           pid: formData.pid || pricingConfig.clinicId || undefined,
+          isSameConcern: formData.isSameConcern !== false,
           healthConcern: formData.healthConcern === 'Other' ? 'Other' : formData.healthConcern,
           healthConcernDetail: formData.healthConcernOther,
           wantsCourierMedicine: formData.needsCourier,
@@ -746,17 +791,17 @@ END:VCALENDAR`;
                     </div>
                   )}
 
-                  {/* Active Appointment Warning Card (One PID / Patient = One Active Appointment) */}
+                  {/* Active Appointment Warning & Family Member Booking Card */}
                   {pricingConfig.activeAppointment && (
-                    <div className="bg-amber-50 border-2 border-amber-300 rounded-2xl p-4 sm:p-5 shadow-sm space-y-4 mt-2">
+                    <div className="bg-amber-50/90 border-2 border-amber-300 rounded-2xl p-4 sm:p-5 shadow-sm space-y-4 mt-2">
                       <div className="flex items-start gap-3">
                         <div className="p-2.5 bg-amber-100 rounded-xl text-amber-700 mt-0.5 flex-shrink-0">
                           <AlertCircle className="w-5 h-5 sm:w-6 sm:h-6" />
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center justify-between flex-wrap gap-2">
-                            <h4 className="text-sm sm:text-base font-bold text-amber-900">
-                              Active Appointment Already Exists
+                            <h4 className="text-sm sm:text-base font-bold text-amber-950">
+                              Active Appointment on this Mobile Number
                             </h4>
                             {pricingConfig.activeAppointment.clinicId && (
                               <span className="text-xs font-bold px-2.5 py-0.5 bg-amber-200 text-amber-900 rounded-lg font-mono">
@@ -764,8 +809,9 @@ END:VCALENDAR`;
                               </span>
                             )}
                           </div>
-                          <p className="text-xs text-amber-800 mt-1.5 leading-relaxed">
-                            Clinic policy permits only <strong>one active appointment per patient (PID)</strong> at a time. You cannot book a duplicate appointment while an upcoming consultation is active.
+                          <p className="text-xs text-amber-900 mt-1 leading-relaxed">
+                            An upcoming consultation is already scheduled for <strong>{pricingConfig.activeAppointment.patientName}</strong>. 
+                            Each patient is limited to one active appointment.
                           </p>
                         </div>
                       </div>
@@ -774,8 +820,8 @@ END:VCALENDAR`;
                       <div className="bg-white rounded-xl p-3.5 sm:p-4 border border-amber-200 shadow-xs space-y-2.5">
                         <div className="flex items-center justify-between border-b border-slate-100 pb-2 text-xs">
                           <div className="flex items-center gap-1.5">
-                            <span className="text-slate-500">Appointment ID:</span>
-                            <span className="font-mono font-bold text-slate-800">{pricingConfig.activeAppointment.id}</span>
+                            <span className="text-slate-500">Patient:</span>
+                            <span className="font-bold text-slate-900">{pricingConfig.activeAppointment.patientName}</span>
                           </div>
                           <div>
                             {getStatusBadge(pricingConfig.activeAppointment.status)}
@@ -785,11 +831,11 @@ END:VCALENDAR`;
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
                           <div className="flex items-center gap-2 text-slate-700">
                             <Calendar className="w-4 h-4 text-amber-600 flex-shrink-0" />
-                            <span><strong>Scheduled Date:</strong> {formatDateSafe(pricingConfig.activeAppointment.date)}</span>
+                            <span><strong>Date:</strong> {formatDateSafe(pricingConfig.activeAppointment.date)}</span>
                           </div>
                           <div className="flex items-center gap-2 text-slate-700">
                             <Clock className="w-4 h-4 text-amber-600 flex-shrink-0" />
-                            <span><strong>Time Slot:</strong> {formatTimeSlotSafe(pricingConfig.activeAppointment.timeSlot)}</span>
+                            <span><strong>Time:</strong> {formatTimeSlotSafe(pricingConfig.activeAppointment.timeSlot)}</span>
                           </div>
                         </div>
 
@@ -798,16 +844,85 @@ END:VCALENDAR`;
                         </div>
                       </div>
 
-                      {/* Reschedule CTA */}
-                      <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-1">
-                        <span className="text-xs text-amber-900 font-medium">Need to change your appointment date or time?</span>
-                        <Link 
-                          to={`/reschedule?phone=${encodeURIComponent(formData.phone)}&appointmentId=${encodeURIComponent(pricingConfig.activeAppointment.id)}`}
-                          className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl shadow-sm transition-all"
-                        >
-                          <RefreshCw className="w-3.5 h-3.5" />
-                          Reschedule Existing Appointment
-                        </Link>
+                      {/* Options: Reschedule vs Book for Family Member */}
+                      <div className="pt-1 space-y-3">
+                        <p className="text-xs font-bold text-amber-950 uppercase tracking-wide">
+                          What would you like to do?
+                        </p>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          {/* Option A: Reschedule */}
+                          <Link 
+                            to={`/reschedule?phone=${encodeURIComponent(formData.phone)}&appointmentId=${encodeURIComponent(pricingConfig.activeAppointment.id)}`}
+                            className="p-3.5 rounded-xl border-2 border-amber-300 bg-white hover:bg-amber-100/50 transition-all flex flex-col justify-between group shadow-xs"
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs font-bold text-amber-900 flex items-center gap-1.5 group-hover:text-amber-800">
+                                <RefreshCw className="w-4 h-4 text-amber-600" />
+                                Reschedule Existing
+                              </span>
+                              <ChevronRight className="w-4 h-4 text-amber-400 group-hover:text-amber-600 transition-transform group-hover:translate-x-0.5" />
+                            </div>
+                            <p className="text-[11px] text-amber-800 mt-2">
+                              Change date or time for <strong>{pricingConfig.activeAppointment.patientName}</strong>.
+                            </p>
+                          </Link>
+
+                          {/* Option B: Book for another person */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const isSwitching = !formData.isBookingForDifferentPerson;
+                              updateForm('isBookingForDifferentPerson', isSwitching);
+                              if (isSwitching) {
+                                if (formData.patientName.trim().toLowerCase() === (pricingConfig.activeAppointment?.patientName || '').trim().toLowerCase()) {
+                                  updateForm('patientName', '');
+                                }
+                                updateForm('pid', '');
+                                updateForm('isExisting', false);
+                              }
+                            }}
+                            className={`p-3.5 rounded-xl border-2 text-left transition-all flex flex-col justify-between shadow-xs ${
+                              formData.isBookingForDifferentPerson
+                                ? 'border-teal-600 bg-teal-50/70 ring-1 ring-teal-600'
+                                : 'border-slate-200 bg-white hover:bg-slate-50'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className={`text-xs font-bold flex items-center gap-1.5 ${
+                                formData.isBookingForDifferentPerson ? 'text-teal-900' : 'text-slate-800'
+                              }`}>
+                                <UserPlus className="w-4 h-4 text-teal-600" />
+                                Book for Another Person
+                              </span>
+                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                                formData.isBookingForDifferentPerson ? 'bg-teal-600 text-white' : 'bg-slate-100 text-slate-600'
+                              }`}>
+                                {formData.isBookingForDifferentPerson ? 'Selected ✓' : 'Select'}
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-slate-600 mt-2">
+                              Book for a family member with a <strong>different name</strong> on this phone number.
+                            </p>
+                          </button>
+                        </div>
+
+                        {formData.isBookingForDifferentPerson && (
+                          <div className="bg-teal-50 border border-teal-200 rounded-xl p-3 text-xs text-teal-900 space-y-1 mt-2">
+                            <div className="font-bold flex items-center gap-1.5 text-teal-800">
+                              <CheckCircle2 className="w-4 h-4 text-teal-600" />
+                              Booking for another patient/family member enabled
+                            </div>
+                            <p className="text-teal-700 text-[11px]">
+                              Please ensure the <strong>Patient Name</strong> entered above is different from "{pricingConfig.activeAppointment.patientName}". A separate Patient ID (PID) will be assigned.
+                            </p>
+                            {formData.patientName && formData.patientName.trim().toLowerCase() === pricingConfig.activeAppointment.patientName.trim().toLowerCase() && (
+                              <p className="text-rose-600 font-bold text-[11px] pt-1">
+                                ⚠️ Name matches the active appointment. Please enter a different name in the Patient Name field above.
+                              </p>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}
@@ -870,14 +985,14 @@ END:VCALENDAR`;
                 </div>
 
                 <div className="mt-8 pt-6 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-4">
-                  {pricingConfig.activeAppointment ? (
+                  {pricingConfig.activeAppointment && !formData.isBookingForDifferentPerson ? (
                     <div className="flex items-center gap-2 text-xs text-amber-800 font-semibold bg-amber-100/70 px-3.5 py-2.5 rounded-xl border border-amber-200 w-full sm:w-auto">
                       <AlertCircle className="w-4 h-4 flex-shrink-0 text-amber-700" />
-                      <span>One active appointment per PID: Please reschedule instead.</span>
+                      <span>Active appointment exists: Reschedule or select "Book for Another Person" above.</span>
                     </div>
                   ) : <div />}
 
-                  {pricingConfig.activeAppointment ? (
+                  {pricingConfig.activeAppointment && !formData.isBookingForDifferentPerson ? (
                     <Link 
                       to={`/reschedule?phone=${encodeURIComponent(formData.phone)}&appointmentId=${encodeURIComponent(pricingConfig.activeAppointment.id)}`}
                       className="w-full sm:w-auto bg-amber-600 hover:bg-amber-700 text-white font-semibold py-3 px-8 rounded-xl flex items-center justify-center gap-2 transition-all shadow-sm text-sm"
@@ -909,11 +1024,121 @@ END:VCALENDAR`;
                 {error && <div className="mb-6 p-3 bg-rose-50 text-rose-600 border border-rose-200 rounded-xl text-sm">{error}</div>}
 
                 <div className="space-y-6">
+                  {/* 7-Day Follow-Up Window: Health Concern Question Box */}
+                  {isEligibleFollowUp && (
+                    <div className="bg-emerald-50 border-2 border-emerald-300 rounded-2xl p-4 sm:p-5 space-y-4 shadow-xs">
+                      <div className="flex items-start gap-3">
+                        <div className="p-2.5 bg-emerald-100 rounded-xl text-emerald-800 mt-0.5 flex-shrink-0">
+                          <Sparkles className="w-5 h-5" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-xs font-bold uppercase tracking-wider bg-emerald-200 text-emerald-900 px-2 py-0.5 rounded">
+                              {pricingConfig.followUpDays}-Day Follow-Up Window
+                            </span>
+                            {(pricingConfig.clinicId || formData.pid) && (
+                              <span className="text-xs font-mono font-semibold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded">
+                                PID: {pricingConfig.clinicId || formData.pid}
+                              </span>
+                            )}
+                          </div>
+                          <h3 className="font-bold text-slate-900 mt-2 text-sm sm:text-base">
+                            Is this consultation regarding the SAME health concern as your last visit?
+                          </h3>
+                          {pricingConfig.lastHealthConcern && (
+                            <p className="text-xs text-slate-700 mt-1 leading-relaxed">
+                              Previous Consultation Concern: <strong className="text-emerald-950 font-bold underline decoration-emerald-400">{pricingConfig.lastHealthConcern}</strong>
+                              {pricingConfig.lastHealthConcernDetail ? ` (${pricingConfig.lastHealthConcernDetail})` : ''}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Selection: Yes (Same Concern) vs No (Different Concern) */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                        {/* Option 1: YES */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            updateForm('isSameConcern', true);
+                            if (pricingConfig.lastHealthConcern) {
+                              updateForm('healthConcern', pricingConfig.lastHealthConcern);
+                              updateForm('healthConcernOther', pricingConfig.lastHealthConcernDetail || '');
+                            }
+                          }}
+                          className={`p-3.5 rounded-xl border-2 text-left transition-all flex flex-col justify-between ${
+                            formData.isSameConcern !== false
+                              ? 'border-emerald-600 bg-white shadow-sm ring-1 ring-emerald-600'
+                              : 'border-emerald-200 bg-emerald-100/40 hover:bg-white'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs sm:text-sm font-bold text-emerald-950 flex items-center gap-2">
+                              <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${formData.isSameConcern !== false ? 'border-emerald-600 bg-emerald-600' : 'border-slate-400'}`}>
+                                {formData.isSameConcern !== false && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
+                              </span>
+                              Yes, Same Concern
+                            </span>
+                            <span className="text-xs font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-full border border-emerald-200">
+                              {pricingConfig.followUpFee === 0 ? 'FREE' : `₹${pricingConfig.followUpFee}`}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-600 mt-2 pl-6">
+                            Prefills previous concern (locked) and applies follow-up window fee.
+                          </p>
+                        </button>
+
+                        {/* Option 2: NO */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            updateForm('isSameConcern', false);
+                            if (formData.healthConcern === pricingConfig.lastHealthConcern) {
+                              updateForm('healthConcern', '');
+                              updateForm('healthConcernOther', '');
+                            }
+                          }}
+                          className={`p-3.5 rounded-xl border-2 text-left transition-all flex flex-col justify-between ${
+                            formData.isSameConcern === false
+                              ? 'border-teal-600 bg-white shadow-sm ring-1 ring-teal-600'
+                              : 'border-emerald-200 bg-emerald-100/40 hover:bg-white'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs sm:text-sm font-bold text-slate-900 flex items-center gap-2">
+                              <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${formData.isSameConcern === false ? 'border-teal-600 bg-teal-600' : 'border-slate-400'}`}>
+                                {formData.isSameConcern === false && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
+                              </span>
+                              No, Different Concern
+                            </span>
+                            <span className="text-xs font-bold text-slate-800 bg-slate-200 px-2 py-0.5 rounded-full">
+                              ₹{pricingConfig.normalFee}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-600 mt-2 pl-6">
+                            Standard consultation fee, booked on existing PID ({pricingConfig.clinicId || formData.pid || 'record'}).
+                          </p>
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-2">Primary Health Concern *</label>
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="block text-sm font-medium text-slate-700">Primary Health Concern *</label>
+                      {isEligibleFollowUp && formData.isSameConcern !== false && (
+                        <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-800 bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded-md">
+                          <Lock className="w-3 h-3 text-emerald-700" /> Locked to Previous Concern
+                        </span>
+                      )}
+                    </div>
                     <select 
-                      value={formData.healthConcern} onChange={e => updateForm('healthConcern', e.target.value)}
-                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500"
+                      value={formData.healthConcern} 
+                      onChange={e => updateForm('healthConcern', e.target.value)}
+                      disabled={isEligibleFollowUp && formData.isSameConcern !== false}
+                      className={`w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 ${
+                        isEligibleFollowUp && formData.isSameConcern !== false ? 'opacity-85 bg-slate-100 cursor-not-allowed text-slate-800 font-semibold' : ''
+                      }`}
                     >
                       <option value="">Select a concern...</option>
                       {HEALTH_CONCERNS.map(c => <option key={c} value={c}>{c}</option>)}
@@ -924,8 +1149,13 @@ END:VCALENDAR`;
                     <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}>
                       <label className="block text-sm font-medium text-slate-700 mb-1">Describe Concern *</label>
                       <textarea 
-                        value={formData.healthConcernOther} onChange={e => updateForm('healthConcernOther', e.target.value)}
-                        rows={3} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 resize-none"
+                        value={formData.healthConcernOther} 
+                        onChange={e => updateForm('healthConcernOther', e.target.value)}
+                        disabled={isEligibleFollowUp && formData.isSameConcern !== false}
+                        rows={3} 
+                        className={`w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 resize-none ${
+                          isEligibleFollowUp && formData.isSameConcern !== false ? 'opacity-85 bg-slate-100 cursor-not-allowed text-slate-800' : ''
+                        }`}
                         placeholder="Briefly describe your symptoms..."
                       />
                     </motion.div>
@@ -1075,7 +1305,11 @@ END:VCALENDAR`;
                   <div>
                     <h3 className="font-bold text-lg text-teal-900">Consultation Fee</h3>
                     <p className="text-sm text-teal-700 mt-1">
-                      {isFollowUp ? `Follow-up within ${pricingConfig.followUpDays}-day window` : 'Standard online video consultation'}
+                      {isFollowUp 
+                        ? `Follow-up consultation within ${pricingConfig.followUpDays}-day window (Same Concern)` 
+                        : (formData.isExisting && formData.isSameConcern === false
+                            ? `Standard consultation (New concern - Linked to PID ${pricingConfig.clinicId || formData.pid || 'record'})`
+                            : 'Standard online video consultation')}
                     </p>
                   </div>
                   <div className="text-right">
