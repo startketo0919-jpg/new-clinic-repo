@@ -617,7 +617,15 @@ export default function SettingsPage() {
                     {googleConnected ? (
                       <button onClick={() => { /* Implement disconnect if needed */ alert('Please disconnect from Google Account settings.'); }} className="px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors">Disconnect</button>
                     ) : (
-                      <button onClick={() => { window.location.href = '/api/google/auth'; }} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors">Connect Google Account</button>
+                      <button 
+                        onClick={() => { 
+                          const token = sessionStorage.getItem('staffAuthToken') || '';
+                          window.location.href = `/api/google/auth?token=${encodeURIComponent(token)}`; 
+                        }} 
+                        className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
+                      >
+                        Connect Google Account
+                      </button>
                     )}
                   </div>
                 </div>

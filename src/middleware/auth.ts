@@ -37,12 +37,18 @@ export const requireAdminAuth = (
   res: Response,
   next: NextFunction
 ) => {
+  let token: string | undefined;
   const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    token = authHeader.split('Bearer ')[1].trim();
+  } else if (typeof req.query.token === 'string') {
+    token = req.query.token.trim();
+  }
+
+  if (!token) {
     return res.status(401).json({ error: 'Unauthorized: Administrator session required.' });
   }
 
-  const token = authHeader.split('Bearer ')[1].trim();
   const payload = verifyAuthToken(token);
 
   if (!payload) {
