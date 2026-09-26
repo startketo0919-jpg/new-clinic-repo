@@ -13,6 +13,8 @@ import { format, addDays, isBefore, isSameDay, getDay, parseISO } from 'date-fns
 // Types for form data
 interface FormData {
   patientName: string;
+  age: string;
+  gender: string;
   phone: string;
   email: string;
   isExisting: boolean;
@@ -52,6 +54,8 @@ export default function BookAppointment() {
   const [step, setStep] = useState(1);
   const [formData, setFormData] = useState<FormData>({
     patientName: '',
+    age: '',
+    gender: '',
     phone: '',
     email: '',
     isExisting: false,
@@ -251,6 +255,11 @@ export default function BookAppointment() {
 
   const validateStep1 = () => {
     if (!formData.patientName.trim()) return 'Patient Name is required';
+    const ageNum = parseInt(String(formData.age), 10);
+    if (!formData.age || isNaN(ageNum) || ageNum < 1 || ageNum > 120) {
+      return 'Please enter a valid age (1-120)';
+    }
+    if (!formData.gender) return 'Please select patient gender';
     if (!formData.phone.match(/^[6-9]\d{9}$/)) return 'Valid 10-digit mobile number required';
     if (!formData.email.match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)) return 'Valid email required';
     
@@ -288,6 +297,13 @@ export default function BookAppointment() {
     if (!formData.courierPhone) {
       updateForm('courierPhone', formData.phone);
     }
+    // Prefill health concern if eligible for follow-up and last health concern exists
+    if (isEligibleFollowUp && pricingConfig.lastHealthConcern && formData.isSameConcern !== false) {
+      updateForm('healthConcern', pricingConfig.lastHealthConcern);
+      if (pricingConfig.lastHealthConcernDetail) {
+        updateForm('healthConcernOther', pricingConfig.lastHealthConcernDetail);
+      }
+    }
     nextStep();
   };
 
@@ -324,8 +340,18 @@ export default function BookAppointment() {
   };
 
   const validateStep2 = () => {
-    if (!formData.healthConcern) return 'Please select a health concern';
-    if (formData.healthConcern === 'Other' && !formData.healthConcernOther.trim()) {
+    let currentConcern = formData.healthConcern;
+    if (isEligibleFollowUp && formData.isSameConcern !== false && pricingConfig.lastHealthConcern) {
+      if (!currentConcern) {
+        currentConcern = pricingConfig.lastHealthConcern;
+        updateForm('healthConcern', pricingConfig.lastHealthConcern);
+        if (pricingConfig.lastHealthConcernDetail) {
+          updateForm('healthConcernOther', pricingConfig.lastHealthConcernDetail);
+        }
+      }
+    }
+    if (!currentConcern) return 'Please select a health concern';
+    if (currentConcern === 'Other' && !formData.healthConcernOther.trim()) {
       return 'Please specify your health concern';
     }
     if (formData.needsCourier) {
@@ -368,6 +394,8 @@ export default function BookAppointment() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           patientName: formData.patientName,
+          age: Number(formData.age),
+          gender: formData.gender,
           phone: formData.phone,
           email: formData.email,
           patientType: formData.isExisting ? 'existing' : 'new',
@@ -700,6 +728,34 @@ END:VCALENDAR`;
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
                     <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Age (Years) *</label>
+                      <input 
+                        type="number" 
+                        min="1" 
+                        max="120"
+                        value={formData.age} 
+                        onChange={e => updateForm('age', e.target.value)}
+                        placeholder="e.g. 28"
+                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Gender *</label>
+                      <select 
+                        value={formData.gender} 
+                        onChange={e => updateForm('gender', e.target.value)}
+                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500"
+                      >
+                        <option value="">Select Gender</option>
+                        <option value="Male">Male</option>
+                        <option value="Female">Female</option>
+                        <option value="Other">Other</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                    <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">Mobile Number *</label>
                       <div className="relative">
                         <Phone className="w-5 h-5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -1024,7 +1080,7 @@ END:VCALENDAR`;
                 {error && <div className="mb-6 p-3 bg-rose-50 text-rose-600 border border-rose-200 rounded-xl text-sm">{error}</div>}
 
                 <div className="space-y-6">
-                  {/* 7-Day Follow-Up Window: Health Concern Question Box */}
+                  {/* Follow-Up Window: Health Concern Question Box */}
                   {isEligibleFollowUp && (
                     <div className="bg-emerald-50 border-2 border-emerald-300 rounded-2xl p-4 sm:p-5 space-y-4 shadow-xs">
                       <div className="flex items-start gap-3">
@@ -1042,102 +1098,108 @@ END:VCALENDAR`;
                               </span>
                             )}
                           </div>
-                          <h3 className="font-bold text-slate-900 mt-2 text-sm sm:text-base">
-                            Is this consultation regarding the SAME health concern as your last visit?
-                          </h3>
-                          {pricingConfig.lastHealthConcern && (
-                            <p className="text-xs text-slate-700 mt-1 leading-relaxed">
-                              Previous Consultation Concern: <strong className="text-emerald-950 font-bold underline decoration-emerald-400">{pricingConfig.lastHealthConcern}</strong>
-                              {pricingConfig.lastHealthConcernDetail ? ` (${pricingConfig.lastHealthConcernDetail})` : ''}
-                            </p>
+                          {pricingConfig.lastHealthConcern ? (
+                            <>
+                              <h3 className="font-bold text-slate-900 mt-2 text-sm sm:text-base">
+                                Is this consultation regarding the SAME health concern as your last visit?
+                              </h3>
+                              <p className="text-xs text-slate-700 mt-1 leading-relaxed">
+                                Previous Consultation Concern: <strong className="text-emerald-950 font-bold underline decoration-emerald-400">{pricingConfig.lastHealthConcern}</strong>
+                                {pricingConfig.lastHealthConcernDetail ? ` (${pricingConfig.lastHealthConcernDetail})` : ''}
+                              </p>
+                            </>
+                          ) : (
+                            <h3 className="font-bold text-slate-900 mt-2 text-sm sm:text-base">
+                              You are eligible for follow-up window pricing ({pricingConfig.followUpFee === 0 ? 'FREE' : `₹${pricingConfig.followUpFee}`}). Please select your health concern below.
+                            </h3>
                           )}
                         </div>
                       </div>
 
-                      {/* Selection: Yes (Same Concern) vs No (Different Concern) */}
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                        {/* Option 1: YES */}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            updateForm('isSameConcern', true);
-                            if (pricingConfig.lastHealthConcern) {
+                      {/* Selection: Yes (Same Concern) vs No (Different Concern) - Only when previous concern is on record */}
+                      {pricingConfig.lastHealthConcern && (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                          {/* Option 1: YES */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              updateForm('isSameConcern', true);
                               updateForm('healthConcern', pricingConfig.lastHealthConcern);
                               updateForm('healthConcernOther', pricingConfig.lastHealthConcernDetail || '');
-                            }
-                          }}
-                          className={`p-3.5 rounded-xl border-2 text-left transition-all flex flex-col justify-between ${
-                            formData.isSameConcern !== false
-                              ? 'border-emerald-600 bg-white shadow-sm ring-1 ring-emerald-600'
-                              : 'border-emerald-200 bg-emerald-100/40 hover:bg-white'
-                          }`}
-                        >
-                          <div className="flex items-center justify-between">
-                            <span className="text-xs sm:text-sm font-bold text-emerald-950 flex items-center gap-2">
-                              <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${formData.isSameConcern !== false ? 'border-emerald-600 bg-emerald-600' : 'border-slate-400'}`}>
-                                {formData.isSameConcern !== false && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
+                            }}
+                            className={`p-3.5 rounded-xl border-2 text-left transition-all flex flex-col justify-between ${
+                              formData.isSameConcern !== false
+                                ? 'border-emerald-600 bg-white shadow-sm ring-1 ring-emerald-600'
+                                : 'border-emerald-200 bg-emerald-100/40 hover:bg-white'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs sm:text-sm font-bold text-emerald-950 flex items-center gap-2">
+                                <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${formData.isSameConcern !== false ? 'border-emerald-600 bg-emerald-600' : 'border-slate-400'}`}>
+                                  {formData.isSameConcern !== false && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
+                                </span>
+                                Yes, Same Concern
                               </span>
-                              Yes, Same Concern
-                            </span>
-                            <span className="text-xs font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-full border border-emerald-200">
-                              {pricingConfig.followUpFee === 0 ? 'FREE' : `₹${pricingConfig.followUpFee}`}
-                            </span>
-                          </div>
-                          <p className="text-[11px] text-slate-600 mt-2 pl-6">
-                            Prefills previous concern (locked) and applies follow-up window fee.
-                          </p>
-                        </button>
+                              <span className="text-xs font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-full border border-emerald-200">
+                                {pricingConfig.followUpFee === 0 ? 'FREE' : `₹${pricingConfig.followUpFee}`}
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-slate-600 mt-2 pl-6">
+                              Prefills "{pricingConfig.lastHealthConcern}" (locked) and applies follow-up window fee.
+                            </p>
+                          </button>
 
-                        {/* Option 2: NO */}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            updateForm('isSameConcern', false);
-                            if (formData.healthConcern === pricingConfig.lastHealthConcern) {
-                              updateForm('healthConcern', '');
-                              updateForm('healthConcernOther', '');
-                            }
-                          }}
-                          className={`p-3.5 rounded-xl border-2 text-left transition-all flex flex-col justify-between ${
-                            formData.isSameConcern === false
-                              ? 'border-teal-600 bg-white shadow-sm ring-1 ring-teal-600'
-                              : 'border-emerald-200 bg-emerald-100/40 hover:bg-white'
-                          }`}
-                        >
-                          <div className="flex items-center justify-between">
-                            <span className="text-xs sm:text-sm font-bold text-slate-900 flex items-center gap-2">
-                              <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${formData.isSameConcern === false ? 'border-teal-600 bg-teal-600' : 'border-slate-400'}`}>
-                                {formData.isSameConcern === false && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
+                          {/* Option 2: NO */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              updateForm('isSameConcern', false);
+                              if (formData.healthConcern === pricingConfig.lastHealthConcern) {
+                                updateForm('healthConcern', '');
+                                updateForm('healthConcernOther', '');
+                              }
+                            }}
+                            className={`p-3.5 rounded-xl border-2 text-left transition-all flex flex-col justify-between ${
+                              formData.isSameConcern === false
+                                ? 'border-teal-600 bg-white shadow-sm ring-1 ring-teal-600'
+                                : 'border-emerald-200 bg-emerald-100/40 hover:bg-white'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs sm:text-sm font-bold text-slate-900 flex items-center gap-2">
+                                <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${formData.isSameConcern === false ? 'border-teal-600 bg-teal-600' : 'border-slate-400'}`}>
+                                  {formData.isSameConcern === false && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
+                                </span>
+                                No, Different Concern
                               </span>
-                              No, Different Concern
-                            </span>
-                            <span className="text-xs font-bold text-slate-800 bg-slate-200 px-2 py-0.5 rounded-full">
-                              ₹{pricingConfig.normalFee}
-                            </span>
-                          </div>
-                          <p className="text-[11px] text-slate-600 mt-2 pl-6">
-                            Standard consultation fee, booked on existing PID ({pricingConfig.clinicId || formData.pid || 'record'}).
-                          </p>
-                        </button>
-                      </div>
+                              <span className="text-xs font-bold text-slate-800 bg-slate-200 px-2 py-0.5 rounded-full">
+                                ₹{pricingConfig.normalFee}
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-slate-600 mt-2 pl-6">
+                              Standard consultation fee, booked on existing PID ({pricingConfig.clinicId || formData.pid || 'record'}).
+                            </p>
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )}
 
                   <div>
                     <div className="flex items-center justify-between mb-2">
                       <label className="block text-sm font-medium text-slate-700">Primary Health Concern *</label>
-                      {isEligibleFollowUp && formData.isSameConcern !== false && (
+                      {isEligibleFollowUp && formData.isSameConcern !== false && Boolean(pricingConfig.lastHealthConcern) && (
                         <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-800 bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded-md">
                           <Lock className="w-3 h-3 text-emerald-700" /> Locked to Previous Concern
                         </span>
                       )}
                     </div>
                     <select 
-                      value={formData.healthConcern} 
+                      value={formData.healthConcern || (isEligibleFollowUp && formData.isSameConcern !== false && pricingConfig.lastHealthConcern ? pricingConfig.lastHealthConcern : '')} 
                       onChange={e => updateForm('healthConcern', e.target.value)}
-                      disabled={isEligibleFollowUp && formData.isSameConcern !== false}
+                      disabled={isEligibleFollowUp && formData.isSameConcern !== false && Boolean(pricingConfig.lastHealthConcern)}
                       className={`w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 ${
-                        isEligibleFollowUp && formData.isSameConcern !== false ? 'opacity-85 bg-slate-100 cursor-not-allowed text-slate-800 font-semibold' : ''
+                        isEligibleFollowUp && formData.isSameConcern !== false && Boolean(pricingConfig.lastHealthConcern) ? 'opacity-85 bg-slate-100 cursor-not-allowed text-slate-800 font-semibold' : ''
                       }`}
                     >
                       <option value="">Select a concern...</option>
@@ -1145,16 +1207,16 @@ END:VCALENDAR`;
                     </select>
                   </div>
 
-                  {formData.healthConcern === 'Other' && (
+                  {(formData.healthConcern === 'Other' || (isEligibleFollowUp && formData.isSameConcern !== false && pricingConfig.lastHealthConcern === 'Other')) && (
                     <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}>
                       <label className="block text-sm font-medium text-slate-700 mb-1">Describe Concern *</label>
                       <textarea 
-                        value={formData.healthConcernOther} 
+                        value={formData.healthConcernOther || (isEligibleFollowUp && formData.isSameConcern !== false && pricingConfig.lastHealthConcernDetail ? pricingConfig.lastHealthConcernDetail : '')} 
                         onChange={e => updateForm('healthConcernOther', e.target.value)}
-                        disabled={isEligibleFollowUp && formData.isSameConcern !== false}
+                        disabled={isEligibleFollowUp && formData.isSameConcern !== false && Boolean(pricingConfig.lastHealthConcern)}
                         rows={3} 
                         className={`w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 resize-none ${
-                          isEligibleFollowUp && formData.isSameConcern !== false ? 'opacity-85 bg-slate-100 cursor-not-allowed text-slate-800' : ''
+                          isEligibleFollowUp && formData.isSameConcern !== false && Boolean(pricingConfig.lastHealthConcern) ? 'opacity-85 bg-slate-100 cursor-not-allowed text-slate-800' : ''
                         }`}
                         placeholder="Briefly describe your symptoms..."
                       />
@@ -1287,11 +1349,11 @@ END:VCALENDAR`;
 
                 <div className="bg-slate-50 border border-slate-200 rounded-xl p-5 mb-6">
                   <h3 className="font-semibold text-slate-800 mb-4 border-b border-slate-200 pb-2">Patient Summary</h3>
-                  <div className="grid grid-cols-2 gap-y-4 text-sm">
                     <div><span className="text-slate-500 block mb-1">Name</span> <span className="font-medium text-slate-800">{formData.patientName}</span></div>
+                    <div><span className="text-slate-500 block mb-1">Age / Gender</span> <span className="font-medium text-slate-800">{formData.age} yrs / {formData.gender}</span></div>
                     <div><span className="text-slate-500 block mb-1">Phone</span> <span className="font-medium text-slate-800">{formData.phone}</span></div>
                     <div><span className="text-slate-500 block mb-1">Patient Type</span> <span className="font-medium text-slate-800">{formData.isExisting ? 'Existing' : 'New'} Patient</span></div>
-                    <div><span className="text-slate-500 block mb-1">Health Concern</span> <span className="font-medium text-slate-800 truncate block">{formData.healthConcern === 'Other' ? formData.healthConcernOther : formData.healthConcern}</span></div>
+                    <div className="col-span-2"><span className="text-slate-500 block mb-1">Health Concern</span> <span className="font-medium text-slate-800 truncate block">{formData.healthConcern === 'Other' ? formData.healthConcernOther : formData.healthConcern}</span></div>
                     {formData.needsCourier && (
                       <div className="col-span-2 mt-2 pt-2 border-t border-slate-200">
                         <span className="text-slate-500 block mb-1">Courier Address</span>

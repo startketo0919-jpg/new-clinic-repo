@@ -1,5 +1,6 @@
 export function buildAppointmentConfirmationEmail(data: { patientName: string, appointmentId: string, clinicId?: string, date: string, timeSlot: string, healthConcern: string, paymentAmount: number, paymentRef: string, meetLink: string, rescheduleUrl: string }): string {
-    const feeText = data.paymentAmount === 0 ? 'FREE (Follow-up)' : `₹${(data.paymentAmount / 100).toFixed(2)} (Paid • Ref: ${data.paymentRef})`;
+    const isFree = data.paymentAmount === 0;
+    const feeDisplay = isFree ? 'FREE (Follow-up)' : `₹${(data.paymentAmount / 100).toFixed(2)} (Paid)`;
     const patientIdText = data.clinicId ? `<p style="margin-bottom: 20px;">Your Patient ID: <strong>${data.clinicId}</strong></p>` : '';
 
     return `
@@ -20,9 +21,9 @@ export function buildAppointmentConfirmationEmail(data: { patientName: string, a
         <!-- Body -->
         <div style="padding: 30px;">
             <div style="text-align: center; margin-bottom: 25px;">
-                <span style="background-color: #e6f4ea; color: #1e4620; padding: 8px 16px; border-radius: 20px; font-weight: 600; font-size: 14px;">
-                    &check; Appointment Confirmed (ID: ${data.appointmentId})
-                </span>
+                <div style="display: inline-block; background-color: #e6f4ea; color: #166534; padding: 8px 18px; border-radius: 20px; font-weight: 600; font-size: 14px; line-height: 1.4; border: 1px solid #bbf7d0;">
+                    &#10003; Appointment Confirmed (ID: ${data.appointmentId})
+                </div>
             </div>
             
             <p style="font-size: 16px;">Hello <strong>${data.patientName}</strong>,</p>
@@ -33,10 +34,16 @@ export function buildAppointmentConfirmationEmail(data: { patientName: string, a
             <!-- Details Card -->
             <div style="border: 2px dashed #e2e8f0; border-radius: 8px; padding: 20px; margin-bottom: 25px; background-color: #fafafa;">
                 <table width="100%" cellpadding="8" cellspacing="0" style="font-size: 15px;">
-                    <tr><td width="35%" style="color: #64748b;">Consultation Type:</td><td><strong>Live Video Consultation (India Only)</strong></td></tr>
-                    <tr><td style="color: #64748b;">Date & Time:</td><td><strong>${data.date} at ${data.timeSlot}</strong></td></tr>
-                    <tr><td style="color: #64748b;">Health Concern:</td><td><strong>${data.healthConcern}</strong></td></tr>
-                    <tr><td style="color: #64748b;">Consultation Fee:</td><td><strong>${feeText}</strong></td></tr>
+                    <tr><td width="35%" style="color: #64748b; vertical-align: top;">Consultation Type:</td><td><strong>Live Video Consultation (India Only)</strong></td></tr>
+                    <tr><td style="color: #64748b; vertical-align: top;">Date & Time:</td><td><strong>${data.date} at ${data.timeSlot}</strong></td></tr>
+                    <tr><td style="color: #64748b; vertical-align: top;">Health Concern:</td><td><strong>${data.healthConcern}</strong></td></tr>
+                    <tr>
+                        <td style="color: #64748b; vertical-align: top;">Consultation Fee:</td>
+                        <td>
+                            <strong>${feeDisplay}</strong>
+                            ${!isFree && data.paymentRef ? `<div style="font-size: 12px; color: #64748b; font-weight: normal; margin-top: 3px; font-family: monospace;">Ref: ${data.paymentRef}</div>` : ''}
+                        </td>
+                    </tr>
                 </table>
             </div>
 
@@ -54,7 +61,7 @@ export function buildAppointmentConfirmationEmail(data: { patientName: string, a
         <!-- Footer -->
         <div style="background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 20px; text-align: center; color: #64748b; font-size: 13px; line-height: 1.6;">
             <p style="margin: 0 0 5px 0;">Krishna Homoeopathic Clinic &bull; +91 94562 18066 &bull; contact@drsunilkumarbhms.in</p>
-            <p style="margin: 0;">15-Day Free Follow-Up Window applies to all registered consultations.</p>
+            <p style="margin: 0;">Follow-up consultation window applies to registered consultations.</p>
         </div>
     </div>
 </body>
@@ -81,9 +88,9 @@ export function buildAppointmentRescheduleEmail(data: { patientName: string, app
         <!-- Body -->
         <div style="padding: 30px;">
             <div style="text-align: center; margin-bottom: 25px;">
-                <span style="background-color: #e0f2fe; color: #0284c7; padding: 8px 16px; border-radius: 20px; font-weight: 600; font-size: 14px;">
+                <div style="display: inline-block; background-color: #e0f2fe; color: #0369a1; padding: 8px 18px; border-radius: 20px; font-weight: 600; font-size: 14px; line-height: 1.4; border: 1px solid #bae6fd;">
                     &#128260; Appointment Rescheduled (ID: ${data.appointmentId})
-                </span>
+                </div>
             </div>
             
             <p style="font-size: 16px;">Hello <strong>${data.patientName}</strong>,</p>
@@ -92,8 +99,8 @@ export function buildAppointmentRescheduleEmail(data: { patientName: string, app
             <!-- Details Card -->
             <div style="border: 2px dashed #e2e8f0; border-radius: 8px; padding: 20px; margin-bottom: 25px; background-color: #fafafa;">
                 <table width="100%" cellpadding="8" cellspacing="0" style="font-size: 15px;">
-                    <tr><td width="35%" style="color: #64748b;">New Date & Time:</td><td><strong>${data.newDate} at ${data.newTimeSlot}</strong></td></tr>
-                    <tr><td style="color: #64748b;">Health Concern:</td><td><strong>${data.healthConcern}</strong></td></tr>
+                    <tr><td width="35%" style="color: #64748b; vertical-align: top;">New Date & Time:</td><td><strong>${data.newDate} at ${data.newTimeSlot}</strong></td></tr>
+                    <tr><td style="color: #64748b; vertical-align: top;">Health Concern:</td><td><strong>${data.healthConcern}</strong></td></tr>
                 </table>
             </div>
 
@@ -111,7 +118,7 @@ export function buildAppointmentRescheduleEmail(data: { patientName: string, app
         <!-- Footer -->
         <div style="background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 20px; text-align: center; color: #64748b; font-size: 13px; line-height: 1.6;">
             <p style="margin: 0 0 5px 0;">Krishna Homoeopathic Clinic &bull; +91 94562 18066 &bull; contact@drsunilkumarbhms.in</p>
-            <p style="margin: 0;">15-Day Free Follow-Up Window applies to all registered consultations.</p>
+            <p style="margin: 0;">Follow-up consultation window applies to registered consultations.</p>
         </div>
     </div>
 </body>
@@ -119,8 +126,9 @@ export function buildAppointmentRescheduleEmail(data: { patientName: string, app
     `;
 }
 
-export function buildStaffNotificationEmail(data: { patientName: string, phone: string, email: string, appointmentId: string, clinicId?: string, date: string, timeSlot: string, healthConcern: string, paymentAmount: number, paymentRef: string, patientType: string, fileLinks?: {name: string, url: string}[], courierInfo?: { address: string, pincode: string, contact: string } }): string {
-    const feeText = data.paymentAmount === 0 ? 'FREE (Follow-up)' : `₹${(data.paymentAmount / 100).toFixed(2)} (Paid • Ref: ${data.paymentRef})`;
+export function buildStaffNotificationEmail(data: { patientName: string, phone: string, email: string, appointmentId: string, clinicId?: string, date: string, timeSlot: string, healthConcern: string, paymentAmount: number, paymentRef: string, patientType: string, age?: number, gender?: string, fileLinks?: {name: string, url: string}[], courierInfo?: { address: string, pincode: string, contact: string } }): string {
+    const isFree = data.paymentAmount === 0;
+    const feeDisplay = isFree ? 'FREE (Follow-up)' : `₹${(data.paymentAmount / 100).toFixed(2)} (Paid)`;
     
     let filesHtml = '';
     if (data.fileLinks && data.fileLinks.length > 0) {
@@ -169,6 +177,7 @@ export function buildStaffNotificationEmail(data: { patientName: string, phone: 
             <table width="100%" cellpadding="8" cellspacing="0" style="font-size: 14px; border: 1px solid #e2e8f0; margin-bottom: 20px;">
                 <tr style="background-color: #f8fafc;"><th colspan="2" style="text-align: left; padding: 10px; border-bottom: 1px solid #e2e8f0;">Patient Details</th></tr>
                 <tr><td width="30%" style="color: #64748b; border-bottom: 1px solid #f1f5f9;">Name:</td><td style="border-bottom: 1px solid #f1f5f9;"><strong>${data.patientName}</strong></td></tr>
+                <tr><td style="color: #64748b; border-bottom: 1px solid #f1f5f9;">Age / Gender:</td><td style="border-bottom: 1px solid #f1f5f9;">${data.age ? data.age + ' yrs' : 'N/A'} / ${data.gender || 'Not Specified'}</td></tr>
                 <tr><td style="color: #64748b; border-bottom: 1px solid #f1f5f9;">Phone:</td><td style="border-bottom: 1px solid #f1f5f9;">${data.phone}</td></tr>
                 <tr><td style="color: #64748b; border-bottom: 1px solid #f1f5f9;">Email:</td><td style="border-bottom: 1px solid #f1f5f9;">${data.email}</td></tr>
                 <tr><td style="color: #64748b; border-bottom: 1px solid #f1f5f9;">Patient ID:</td><td style="border-bottom: 1px solid #f1f5f9;">${data.clinicId || 'N/A (New)'}</td></tr>
@@ -180,7 +189,13 @@ export function buildStaffNotificationEmail(data: { patientName: string, phone: 
                 <tr><td width="30%" style="color: #64748b; border-bottom: 1px solid #f1f5f9;">Date & Time:</td><td style="border-bottom: 1px solid #f1f5f9;"><strong>${data.date} at ${data.timeSlot}</strong></td></tr>
                 <tr><td style="color: #64748b; border-bottom: 1px solid #f1f5f9;">Concern:</td><td style="border-bottom: 1px solid #f1f5f9;">${data.healthConcern}</td></tr>
                 <tr><td style="color: #64748b; border-bottom: 1px solid #f1f5f9;">Appt ID:</td><td style="border-bottom: 1px solid #f1f5f9;">${data.appointmentId}</td></tr>
-                <tr><td style="color: #64748b;">Payment:</td><td>${feeText}</td></tr>
+                <tr>
+                    <td style="color: #64748b;">Payment:</td>
+                    <td>
+                        <strong>${feeDisplay}</strong>
+                        ${!isFree && data.paymentRef ? `<div style="font-size: 12px; color: #64748b; font-weight: normal; margin-top: 2px; font-family: monospace;">Ref: ${data.paymentRef}</div>` : ''}
+                    </td>
+                </tr>
             </table>
 
             ${filesHtml}
@@ -216,9 +231,9 @@ export function buildReminderEmail(data: { patientName: string, appointmentId: s
         <!-- Body -->
         <div style="padding: 30px;">
             <div style="text-align: center; margin-bottom: 25px;">
-                <span style="background-color: #fef08a; color: #854d0e; padding: 8px 16px; border-radius: 20px; font-weight: 600; font-size: 14px;">
+                <div style="display: inline-block; background-color: #fef08a; color: #854d0e; padding: 8px 18px; border-radius: 20px; font-weight: 600; font-size: 14px; line-height: 1.4; border: 1px solid #fde047;">
                     &#9200; Appointment Reminder
-                </span>
+                </div>
             </div>
             
             <p style="font-size: 16px;">Hello <strong>${data.patientName}</strong>,</p>
@@ -238,7 +253,7 @@ export function buildReminderEmail(data: { patientName: string, appointmentId: s
         <!-- Footer -->
         <div style="background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 20px; text-align: center; color: #64748b; font-size: 13px; line-height: 1.6;">
             <p style="margin: 0 0 5px 0;">Krishna Homoeopathic Clinic &bull; +91 94562 18066 &bull; contact@drsunilkumarbhms.in</p>
-            <p style="margin: 0;">15-Day Free Follow-Up Window applies to all registered consultations.</p>
+            <p style="margin: 0;">Follow-up consultation window applies to registered consultations.</p>
         </div>
     </div>
 </body>
@@ -265,9 +280,9 @@ export function buildRefundEmail(data: { patientName: string, appointmentId: str
         <!-- Body -->
         <div style="padding: 30px;">
             <div style="text-align: center; margin-bottom: 25px;">
-                <span style="background-color: #fee2e2; color: #b91c1c; padding: 8px 16px; border-radius: 20px; font-weight: 600; font-size: 14px;">
+                <div style="display: inline-block; background-color: #fee2e2; color: #b91c1c; padding: 8px 18px; border-radius: 20px; font-weight: 600; font-size: 14px; line-height: 1.4; border: 1px solid #fecaca;">
                     &#10060; Appointment Cancelled
-                </span>
+                </div>
             </div>
             
             <p style="font-size: 16px;">Hello <strong>${data.patientName}</strong>,</p>
@@ -288,7 +303,7 @@ export function buildRefundEmail(data: { patientName: string, appointmentId: str
         <!-- Footer -->
         <div style="background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 20px; text-align: center; color: #64748b; font-size: 13px; line-height: 1.6;">
             <p style="margin: 0 0 5px 0;">Krishna Homoeopathic Clinic &bull; +91 94562 18066 &bull; contact@drsunilkumarbhms.in</p>
-            <p style="margin: 0;">15-Day Free Follow-Up Window applies to all registered consultations.</p>
+            <p style="margin: 0;">Follow-up consultation window applies to registered consultations.</p>
         </div>
     </div>
 </body>
@@ -331,7 +346,7 @@ export function buildRescheduleOtpEmail(data: { patientName: string, otp: string
         <!-- Footer -->
         <div style="background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 20px; text-align: center; color: #64748b; font-size: 13px; line-height: 1.6;">
             <p style="margin: 0 0 5px 0;">Krishna Homoeopathic Clinic &bull; +91 94562 18066 &bull; contact@drsunilkumarbhms.in</p>
-            <p style="margin: 0;">15-Day Free Follow-Up Window applies to all registered consultations.</p>
+            <p style="margin: 0;">Follow-up consultation window applies to registered consultations.</p>
         </div>
     </div>
 </body>

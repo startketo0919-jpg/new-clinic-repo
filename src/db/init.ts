@@ -133,6 +133,8 @@ export async function initDb() {
     `CREATE TABLE IF NOT EXISTS online_appointments (
       id VARCHAR(191) PRIMARY KEY,
       patient_name TEXT NOT NULL,
+      age INT,
+      gender VARCHAR(20),
       phone VARCHAR(20) NOT NULL,
       email VARCHAR(255) NOT NULL,
       patient_type VARCHAR(20) NOT NULL,
@@ -200,7 +202,9 @@ export async function initDb() {
     `ALTER TABLE settings ADD COLUMN IF NOT EXISTS google_calendar_email TEXT;`,
     `ALTER TABLE settings ADD COLUMN IF NOT EXISTS notification_emails TEXT;`,
     `ALTER TABLE settings ADD COLUMN IF NOT EXISTS follow_up_free_days INT DEFAULT 7;`,
-    `ALTER TABLE settings ADD COLUMN IF NOT EXISTS follow_up_fee INT DEFAULT 0;`
+    `ALTER TABLE settings ADD COLUMN IF NOT EXISTS follow_up_fee INT DEFAULT 0;`,
+    `ALTER TABLE online_appointments ADD COLUMN IF NOT EXISTS age INT;`,
+    `ALTER TABLE online_appointments ADD COLUMN IF NOT EXISTS gender VARCHAR(20);`
   ];
 
   for (const alterQ of alterSettingsQueries) {

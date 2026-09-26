@@ -1967,6 +1967,8 @@ async function sendPatientEmail(s: any, to: string, subject: string, html: strin
 }
 
 // Helper: Check 7-day follow-up eligibility across all sources
+// Rule: ONLY patients with COMPLETED appointments within the follow-up window are eligible!
+// Cancelled, deleted, rescheduled, or uncompleted confirmed appointments must NEVER qualify.
 async function checkFollowUpEligibility(
   phone: string, 
   freeDays: number, 
@@ -1984,34 +1986,33 @@ async function checkFollowUpEligibility(
 }> {
   const now = new Date();
   
-  // 1. Check manual last visit date if provided by patient
-  if (manualLastVisit) {
-    const manualDate = new Date(manualLastVisit);
-    if (!isNaN(manualDate.getTime())) {
-      const diffDays = Math.floor((now.getTime() - manualDate.getTime()) / (1000 * 60 * 60 * 24));
-      if (diffDays >= 0 && diffDays <= freeDays) {
-        return { isEligible: true, lastDate: manualLastVisit, source: 'manual_visit_date' };
-      }
-    }
-  }
-
   if (phone || pid) {
-    // 2. Check previous paid or completed online appointments
+    // 1. Primary Check: Previous COMPLETED online video consultation
+    // Strictly status = 'completed'
     try {
-      let query = `SELECT appointment_date, health_concern, health_concern_detail, patient_name, clinic_id FROM online_appointments WHERE ((phone = ? AND phone != '') OR (clinic_id IS NOT NULL AND clinic_id != '' AND clinic_id = ?))`;
+      let query = `
+        SELECT appointment_date, health_concern, health_concern_detail, patient_name, clinic_id 
+        FROM online_appointments 
+        WHERE ((phone = ? AND phone != '') OR (clinic_id IS NOT NULL AND clinic_id != '' AND clinic_id = ?))
+          AND status = 'completed'
+      `;
       const params: any[] = [phone || '', pid || ''];
       if (patientName) {
         query += ` AND LOWER(TRIM(patient_name)) = LOWER(TRIM(?))`;
         params.push(patientName);
       }
-      query += ` AND (payment_status = 'paid' OR is_follow_up_free = 1) AND status IN ('confirmed','completed') ORDER BY appointment_date DESC LIMIT 1`;
+      query += ` ORDER BY appointment_date DESC, created_at DESC LIMIT 1`;
 
       let [onlineRows]: any = await pool.query(query, params);
 
-      // Fallback search without patientName if not found
+      // Fallback search without patientName if not found with name
       if (onlineRows.length === 0 && patientName) {
         const [fallbackRows]: any = await pool.query(
-          `SELECT appointment_date, health_concern, health_concern_detail, patient_name, clinic_id FROM online_appointments WHERE ((phone = ? AND phone != '') OR (clinic_id IS NOT NULL AND clinic_id != '' AND clinic_id = ?)) AND (payment_status = 'paid' OR is_follow_up_free = 1) AND status IN ('confirmed','completed') ORDER BY appointment_date DESC LIMIT 1`,
+          `SELECT appointment_date, health_concern, health_concern_detail, patient_name, clinic_id 
+           FROM online_appointments 
+           WHERE ((phone = ? AND phone != '') OR (clinic_id IS NOT NULL AND clinic_id != '' AND clinic_id = ?))
+             AND status = 'completed'
+           ORDER BY appointment_date DESC, created_at DESC LIMIT 1`,
           [phone || '', pid || '']
         );
         onlineRows = fallbackRows;
@@ -2038,57 +2039,54 @@ async function checkFollowUpEligibility(
       console.error('[Eligibility] Online appointments check error:', e);
     }
 
-    // 3. Check physical clinic patient registry
+    // 2. Secondary Check: Physical in-clinic COMPLETED visits from patient_registry
+    // Must check last_visited IS NOT NULL (completed consultation date), NOT first_visit!
     try {
-      const [regRows]: any = await pool.query(
-        `SELECT clinic_id, full_name, last_visited, first_visit FROM patient_registry WHERE (phone = ? OR (clinic_id IS NOT NULL AND clinic_id = ?)) ORDER BY COALESCE(last_visited, first_visit) DESC LIMIT 1`,
-        [phone || '', pid || '']
-      );
-      if (regRows.length > 0) {
-        const visitDate = regRows[0].last_visited || regRows[0].first_visit;
-        if (visitDate) {
-          const lastDate = new Date(visitDate);
-          if (!isNaN(lastDate.getTime())) {
-            const diffDays = Math.floor((now.getTime() - lastDate.getTime()) / (1000 * 60 * 60 * 24));
-            if (diffDays >= 0 && diffDays <= freeDays) {
-              return { 
-                isEligible: true, 
-                lastDate: lastDate.toISOString().split('T')[0], 
-                lastPatientName: regRows[0].full_name,
-                clinicId: regRows[0].clinic_id,
-                source: 'patient_registry' 
-              };
-            }
+      let regQuery = `SELECT clinic_id, full_name, last_visited FROM patient_registry WHERE (phone = ? OR (clinic_id IS NOT NULL AND clinic_id = ?))`;
+      const regParams: any[] = [phone || '', pid || ''];
+      if (patientName) {
+        regQuery += ` AND LOWER(TRIM(full_name)) = LOWER(TRIM(?))`;
+        regParams.push(patientName);
+      }
+      regQuery += ` AND last_visited IS NOT NULL ORDER BY last_visited DESC LIMIT 1`;
+
+      let [regRows]: any = await pool.query(regQuery, regParams);
+      if (regRows.length === 0 && patientName) {
+        const [fallbackReg]: any = await pool.query(
+          `SELECT clinic_id, full_name, last_visited FROM patient_registry WHERE (phone = ? OR (clinic_id IS NOT NULL AND clinic_id = ?)) AND last_visited IS NOT NULL ORDER BY last_visited DESC LIMIT 1`,
+          [phone || '', pid || '']
+        );
+        regRows = fallbackReg;
+      }
+
+      if (regRows.length > 0 && regRows[0].last_visited) {
+        const lastDate = new Date(regRows[0].last_visited);
+        if (!isNaN(lastDate.getTime())) {
+          const diffDays = Math.floor((now.getTime() - lastDate.getTime()) / (1000 * 60 * 60 * 24));
+          if (diffDays >= 0 && diffDays <= freeDays) {
+            return { 
+              isEligible: true, 
+              lastDate: lastDate.toISOString().split('T')[0], 
+              lastPatientName: regRows[0].full_name,
+              clinicId: regRows[0].clinic_id,
+              source: 'patient_registry' 
+            };
           }
         }
       }
     } catch (e) {
       console.error('[Eligibility] Registry check error:', e);
     }
+  }
 
-    // 4. Check in-clinic appointments
-    try {
-      const [aptRows]: any = await pool.query(
-        `SELECT clinic_id, full_name, date FROM appointments WHERE (phone = ? OR (clinic_id IS NOT NULL AND clinic_id = ?)) ORDER BY date DESC LIMIT 1`,
-        [phone || '', pid || '']
-      );
-      if (aptRows.length > 0 && aptRows[0].date) {
-        const lastDate = new Date(aptRows[0].date);
-        if (!isNaN(lastDate.getTime())) {
-          const diffDays = Math.floor((now.getTime() - lastDate.getTime()) / (1000 * 60 * 60 * 24));
-          if (diffDays >= 0 && diffDays <= freeDays) {
-            return { 
-              isEligible: true, 
-              lastDate: aptRows[0].date, 
-              lastPatientName: aptRows[0].full_name,
-              clinicId: aptRows[0].clinic_id,
-              source: 'clinic_appointments' 
-            };
-          }
-        }
+  // 3. Manual last visit date (if patient explicitly entered an approximate last visit date)
+  if (manualLastVisit) {
+    const manualDate = new Date(manualLastVisit);
+    if (!isNaN(manualDate.getTime())) {
+      const diffDays = Math.floor((now.getTime() - manualDate.getTime()) / (1000 * 60 * 60 * 24));
+      if (diffDays >= 0 && diffDays <= freeDays) {
+        return { isEligible: true, lastDate: manualLastVisit, source: 'manual_visit_date' };
       }
-    } catch (e) {
-      console.error('[Eligibility] Clinic appointments check error:', e);
     }
   }
 
@@ -2222,7 +2220,7 @@ app.post('/api/appointments/create-order', async (req, res) => {
   
   try {
     const { 
-      patientName, phone, email, patientType, shortAddress, lastVisitDate, pid, 
+      patientName, age, gender, phone, email, patientType, shortAddress, lastVisitDate, pid, 
       isSameConcern, healthConcern, healthConcernDetail, wantsCourierMedicine, 
       courierAddress, courierContact, courierPincode 
     } = req.body;
@@ -2233,6 +2231,10 @@ app.post('/api/appointments/create-order', async (req, res) => {
     if (!/^[6-9]\d{9}$/.test(phone)) {
       return res.status(400).json({ error: 'Invalid phone number' });
     }
+
+    const parsedAge = age ? parseInt(String(age), 10) : null;
+    const finalAge = parsedAge && !isNaN(parsedAge) && parsedAge > 0 ? parsedAge : null;
+    const finalGender = gender ? String(gender).trim() : null;
 
     // Enforce: Multiple appointments can be made with same mobile, but name must be different!
     // Check if an active appointment already exists for the SAME patient name on this phone:
@@ -2310,8 +2312,8 @@ app.post('/api/appointments/create-order', async (req, res) => {
     const appointmentId = 'APT-' + crypto.randomUUID().substring(0, 8);
     
     await pool.query(
-      `INSERT INTO online_appointments (id, patient_name, phone, email, patient_type, short_address, last_visit_date, clinic_id, health_concern, health_concern_detail, wants_courier_medicine, courier_address, courier_contact, courier_pincode, payment_amount, payment_status, is_follow_up_free, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_slot', NOW())`,
-      [appointmentId, patientName, phone, email, patientType, shortAddress || null, lastVisitDate || null, clinicId || null, finalHealthConcern, finalHealthConcernDetail || null, wantsCourierMedicine || false, courierAddress || null, courierContact || phone, courierPincode || null, fee, isFree ? 'paid' : 'pending', isFollowUp]
+      `INSERT INTO online_appointments (id, patient_name, age, gender, phone, email, patient_type, short_address, last_visit_date, clinic_id, health_concern, health_concern_detail, wants_courier_medicine, courier_address, courier_contact, courier_pincode, payment_amount, payment_status, is_follow_up_free, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_slot', NOW())`,
+      [appointmentId, patientName, finalAge, finalGender, phone, email, patientType, shortAddress || null, lastVisitDate || null, clinicId || null, finalHealthConcern, finalHealthConcernDetail || null, wantsCourierMedicine || false, courierAddress || null, courierContact || phone, courierPincode || null, fee, isFree ? 'paid' : 'pending', isFollowUp]
     );
     
     if (isFree) {
@@ -2513,11 +2515,17 @@ app.post('/api/appointments/book-slot', async (req, res) => {
       );
       if (existingPatient.length > 0) {
         clinicId = existingPatient[0].clinic_id;
+        if (apt.age || (apt.gender && apt.gender !== 'Not Specified')) {
+          await pool.query(
+            `UPDATE patient_registry SET age = COALESCE(NULLIF(?, 0), age), gender = COALESCE(NULLIF(?, 'Not Specified'), gender) WHERE clinic_id = ?`,
+            [apt.age || 0, apt.gender || 'Not Specified', clinicId]
+          );
+        }
       } else {
         clinicId = await generateClinicId();
         await pool.query(
-          `INSERT INTO patient_registry (clinic_id, full_name, phone, email, age, gender, first_visit) VALUES (?, ?, ?, ?, 0, 'Not Specified', NOW())`,
-          [clinicId, apt.patient_name, apt.phone, apt.email]
+          `INSERT INTO patient_registry (clinic_id, full_name, phone, email, age, gender, first_visit) VALUES (?, ?, ?, ?, ?, ?, NOW())`,
+          [clinicId, apt.patient_name, apt.phone, apt.email, apt.age || 0, apt.gender || 'Not Specified']
         );
       }
     }
@@ -2558,6 +2566,7 @@ app.post('/api/appointments/book-slot', async (req, res) => {
       
       await sendStaffNotification(s, {
         patientName: apt.patient_name, phone: apt.phone, email: apt.email,
+        age: apt.age, gender: apt.gender,
         appointmentId, clinicId, date, timeSlot: timeLabel,
         healthConcern: apt.health_concern, paymentAmount: apt.payment_amount,
         paymentRef: apt.razorpay_payment_id || 'FREE', patientType: apt.patient_type,

@@ -140,6 +140,8 @@ export const patientShipments = mysqlTable("patient_shipments", {
 export const onlineAppointments = mysqlTable("online_appointments", {
   id: varchar("id", { length: 191 }).primaryKey(),
   patientName: text("patient_name").notNull(),
+  age: int("age"),
+  gender: varchar("gender", { length: 20 }),
   phone: varchar("phone", { length: 20 }).notNull(),
   email: varchar("email", { length: 255 }).notNull(),
   patientType: varchar("patient_type", { length: 20 }).notNull(),
