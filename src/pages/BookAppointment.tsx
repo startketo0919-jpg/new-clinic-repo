@@ -1349,6 +1349,7 @@ END:VCALENDAR`;
 
                 <div className="bg-slate-50 border border-slate-200 rounded-xl p-5 mb-6">
                   <h3 className="font-semibold text-slate-800 mb-4 border-b border-slate-200 pb-2">Patient Summary</h3>
+                  <div className="grid grid-cols-2 gap-y-4 text-sm">
                     <div><span className="text-slate-500 block mb-1">Name</span> <span className="font-medium text-slate-800">{formData.patientName}</span></div>
                     <div><span className="text-slate-500 block mb-1">Age / Gender</span> <span className="font-medium text-slate-800">{formData.age} yrs / {formData.gender}</span></div>
                     <div><span className="text-slate-500 block mb-1">Phone</span> <span className="font-medium text-slate-800">{formData.phone}</span></div>
