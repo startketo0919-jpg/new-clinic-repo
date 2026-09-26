@@ -141,7 +141,11 @@ export default function OnlineAppointments({ userRole }: { userRole?: string | n
         );
       }
       return true;
-    }).sort((a, b) => new Date(`${a.date}T${a.time}`).getTime() - new Date(`${b.date}T${b.time}`).getTime());
+    }).sort((a, b) => {
+      const timeA = a.date && a.time ? new Date(`${a.date}T${a.time}`).getTime() : 0;
+      const timeB = b.date && b.time ? new Date(`${b.date}T${b.time}`).getTime() : 0;
+      return timeB - timeA;
+    });
   }, [appointments, statusFilter, dateFilter, searchQuery]);
 
   // Calendar logic
@@ -269,8 +273,13 @@ export default function OnlineAppointments({ userRole }: { userRole?: string | n
                       <React.Fragment key={app.id}>
                         <tr className="hover:bg-slate-50/50 transition-colors group cursor-pointer" onClick={() => toggleRow(app.id)}>
                           <td className="px-4 py-3">
-                            <div className="font-semibold text-slate-800">{format(parseISO(app.date), 'MMM d, yyyy')}</div>
-                            <div className="text-sm text-slate-500">{app.time}</div>
+                            <div className="font-semibold text-slate-800">
+                              {app.date ? (() => {
+                                try { return format(parseISO(app.date), 'MMM d, yyyy'); }
+                                catch { return app.date; }
+                              })() : 'Date Pending'}
+                            </div>
+                            <div className="text-sm text-slate-500">{app.time || 'Pending'}</div>
                           </td>
                           <td className="px-4 py-3">
                             <div className="font-bold text-slate-800">{app.patientName}</div>
@@ -363,7 +372,10 @@ export default function OnlineAppointments({ userRole }: { userRole?: string | n
                                 <div>
                                   <h4 className="text-xs font-bold text-slate-500 uppercase mb-2">Details</h4>
                                   <div className="text-sm text-slate-700 space-y-1">
-                                    <p><b>Created:</b> {format(parseISO(app.createdAt), 'MMM d, yyyy h:mm a')}</p>
+                                    <p><b>Created:</b> {app.createdAt ? (() => {
+                                      try { return format(new Date(app.createdAt), 'MMM d, yyyy h:mm a'); }
+                                      catch { return String(app.createdAt); }
+                                    })() : 'N/A'}</p>
                                     <p><b>Rescheduled:</b> {app.rescheduleCount} time(s)</p>
                                     <p><b>Email:</b> {app.patientName.replace(/\s+/g, '').toLowerCase()}@example.com</p>
                                   </div>
