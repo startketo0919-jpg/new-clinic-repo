@@ -41,6 +41,7 @@ async function startServer() {
   const app = express();
   const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
+  app.set('trust proxy', 1);
   app.disable("x-powered-by");
   app.use(securityHeaders);
   app.use("/api", apiAntiAbuseLimiter);
@@ -1845,13 +1846,20 @@ app.post("/api/action", optionalAuth, async (req: AuthRequest, res) => {
 
   // ===== ONLINE APPOINTMENT SYSTEM =====
 
+// Helper to compute public redirect URI with proper HTTPS scheme behind reverse proxy
+function getPublicRedirectUri(req: express.Request): string {
+  const host = req.get('host') || 'app.drsunilkumarbhms.in';
+  const proto = req.headers['x-forwarded-proto'] || (host.includes('drsunilkumarbhms.in') ? 'https' : req.protocol);
+  return `${proto}://${host}/api/google/callback`;
+}
+
 // Google OAuth - Initiate connection
 app.get('/api/google/auth', requireAdminAuth, async (req: AuthRequest, res) => {
   try {
     const [settingsRows]: any = await pool.query('SELECT * FROM settings WHERE id = ?', ['default']);
     const s = settingsRows[0];
     const clientId = s?.google_oauth_client_id || '715658585090-ijo4cn4qf0erak1jl2fucdstllqieosh.apps.googleusercontent.com';
-    const redirectUri = `${req.protocol}://${req.get('host')}/api/google/callback`;
+    const redirectUri = getPublicRedirectUri(req);
     const url = getGoogleAuthUrl(clientId, redirectUri);
     res.redirect(url);
   } catch (err: any) {
@@ -1870,7 +1878,7 @@ app.get('/api/google/callback', async (req, res) => {
     const s = settingsRows[0];
     const clientId = s?.google_oauth_client_id || '715658585090-ijo4cn4qf0erak1jl2fucdstllqieosh.apps.googleusercontent.com';
     const clientSecret = s?.google_oauth_client_secret || '';
-    const redirectUri = `${req.protocol}://${req.get('host')}/api/google/callback`;
+    const redirectUri = getPublicRedirectUri(req);
     
     const tokens = await exchangeCodeForTokens(code, clientId, clientSecret, redirectUri);
     
