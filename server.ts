@@ -2055,14 +2055,63 @@ app.get('/api/appointments/config', async (req, res) => {
     const followUpDays = s.follow_up_free_days !== undefined && s.follow_up_free_days !== null ? s.follow_up_free_days : 7;
 
     const phone = (req.query.phone as string) || '';
+    const pid = (req.query.pid as string) || '';
     const lastVisitDate = (req.query.lastVisitDate as string) || '';
 
     let isFollowUp = false;
     let followUpDetails: any = null;
+    let clinicId: string | null = pid || null;
+    let activeAppointment: any = null;
 
-    if (phone.length === 10 || lastVisitDate) {
+    if (phone.length === 10 || pid || lastVisitDate) {
+      if (!clinicId && phone.length === 10) {
+        try {
+          const [pRows]: any = await pool.query(
+            `SELECT clinic_id FROM patient_registry WHERE phone = ? LIMIT 1`,
+            [phone]
+          );
+          if (pRows.length > 0) clinicId = pRows[0].clinic_id;
+        } catch (e) {
+          console.error('[Config] Error looking up PID:', e);
+        }
+      }
+
       followUpDetails = await checkFollowUpEligibility(phone, followUpDays, lastVisitDate);
       isFollowUp = followUpDetails.isEligible;
+
+      // Check for active appointment (One PID / Patient = One Active Appointment)
+      try {
+        const todayStr = new Date().toISOString().split('T')[0];
+        const [activeRows]: any = await pool.query(
+          `SELECT id, patient_name, phone, email, clinic_id, appointment_date, time_slot, slot_end, health_concern, status, meet_link 
+           FROM online_appointments 
+           WHERE ((phone = ? AND phone != '') OR (clinic_id IS NOT NULL AND clinic_id != '' AND clinic_id = ?))
+             AND status IN ('confirmed', 'rescheduled')
+             AND (appointment_date >= ? OR appointment_date IS NULL)
+           ORDER BY appointment_date ASC, time_slot ASC 
+           LIMIT 1`,
+          [phone, clinicId || '', todayStr]
+        );
+
+        if (activeRows.length > 0) {
+          const act = activeRows[0];
+          activeAppointment = {
+            id: act.id,
+            patientName: act.patient_name,
+            phone: act.phone,
+            email: act.email,
+            clinicId: act.clinic_id || clinicId,
+            date: act.appointment_date,
+            timeSlot: act.time_slot,
+            slotEnd: act.slot_end,
+            healthConcern: act.health_concern,
+            status: act.status,
+            meetLink: act.meet_link
+          };
+        }
+      } catch (actErr) {
+        console.error('[Config] Error checking active appointment:', actErr);
+      }
     }
 
     const calculatedFeePaise = isFollowUp ? followUpFeePaise : normalFeePaise;
@@ -2074,7 +2123,9 @@ app.get('/api/appointments/config', async (req, res) => {
       isFollowUp,
       calculatedFee: calculatedFeePaise / 100,
       isFree: calculatedFeePaise === 0,
-      details: followUpDetails
+      details: followUpDetails,
+      clinicId,
+      activeAppointment
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -2104,13 +2155,45 @@ app.post('/api/appointments/create-order', async (req, res) => {
   ipSubmissionTracker.set('apt_' + ip, timestamps);
   
   try {
-    const { patientName, phone, email, patientType, shortAddress, lastVisitDate, healthConcern, healthConcernDetail, wantsCourierMedicine, courierAddress, courierContact, courierPincode } = req.body;
+    const { patientName, phone, email, patientType, shortAddress, lastVisitDate, pid, healthConcern, healthConcernDetail, wantsCourierMedicine, courierAddress, courierContact, courierPincode } = req.body;
     
     if (!patientName || !phone || !email || !patientType || !healthConcern) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
     if (!/^[6-9]\d{9}$/.test(phone)) {
       return res.status(400).json({ error: 'Invalid phone number' });
+    }
+
+    // Enforce: One PID / Patient can only have ONE active appointment
+    let clinicId = pid || null;
+    if (!clinicId) {
+      const [regRows]: any = await pool.query(`SELECT clinic_id FROM patient_registry WHERE phone = ? LIMIT 1`, [phone]);
+      if (regRows.length > 0) clinicId = regRows[0].clinic_id;
+    }
+
+    const todayStr = new Date().toISOString().split('T')[0];
+    const [existingActive]: any = await pool.query(
+      `SELECT id, patient_name, appointment_date, time_slot, health_concern, status, clinic_id FROM online_appointments 
+       WHERE ((phone = ? AND phone != '') OR (clinic_id IS NOT NULL AND clinic_id != '' AND clinic_id = ?))
+         AND status IN ('confirmed', 'rescheduled')
+         AND (appointment_date >= ? OR appointment_date IS NULL)
+       LIMIT 1`,
+      [phone, clinicId || '', todayStr]
+    );
+
+    if (existingActive.length > 0) {
+      return res.status(400).json({
+        error: 'You already have an active appointment scheduled. Each patient is limited to one active appointment at a time. Please reschedule your existing appointment instead.',
+        activeAppointment: {
+          id: existingActive[0].id,
+          patientName: existingActive[0].patient_name,
+          date: existingActive[0].appointment_date,
+          timeSlot: existingActive[0].time_slot,
+          healthConcern: existingActive[0].health_concern,
+          status: existingActive[0].status,
+          clinicId: existingActive[0].clinic_id || clinicId
+        }
+      });
     }
     
     const s = await getAppointmentSettings();
@@ -2126,8 +2209,8 @@ app.post('/api/appointments/create-order', async (req, res) => {
     const appointmentId = 'APT-' + crypto.randomUUID().substring(0, 8);
     
     await pool.query(
-      `INSERT INTO online_appointments (id, patient_name, phone, email, patient_type, short_address, last_visit_date, health_concern, health_concern_detail, wants_courier_medicine, courier_address, courier_contact, courier_pincode, payment_amount, payment_status, is_follow_up_free, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_slot', NOW())`,
-      [appointmentId, patientName, phone, email, patientType, shortAddress || null, lastVisitDate || null, healthConcern, healthConcernDetail || null, wantsCourierMedicine || false, courierAddress || null, courierContact || phone, courierPincode || null, fee, isFree ? 'paid' : 'pending', isFollowUp]
+      `INSERT INTO online_appointments (id, patient_name, phone, email, patient_type, short_address, last_visit_date, clinic_id, health_concern, health_concern_detail, wants_courier_medicine, courier_address, courier_contact, courier_pincode, payment_amount, payment_status, is_follow_up_free, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_slot', NOW())`,
+      [appointmentId, patientName, phone, email, patientType, shortAddress || null, lastVisitDate || null, clinicId || null, healthConcern, healthConcernDetail || null, wantsCourierMedicine || false, courierAddress || null, courierContact || phone, courierPincode || null, fee, isFree ? 'paid' : 'pending', isFollowUp]
     );
     
     if (isFree) {
@@ -2437,13 +2520,25 @@ app.post('/api/appointments/lookup', async (req, res) => {
   ts.push(now); ipSubmissionTracker.set('lookup_' + ip, ts);
   
   try {
-    const { phone } = req.body;
-    if (!phone) return res.status(400).json({ error: 'Phone number required' });
+    const { phone, appointmentId, pid } = req.body;
+    if (!phone && !appointmentId && !pid) return res.status(400).json({ error: 'Phone number or Appointment ID required' });
     
+    let clinicId = pid || null;
+    if (!clinicId && phone) {
+      const [regRows]: any = await pool.query(`SELECT clinic_id FROM patient_registry WHERE phone = ? LIMIT 1`, [phone]);
+      if (regRows.length > 0) clinicId = regRows[0].clinic_id;
+    }
+
     const today = new Date().toISOString().split('T')[0];
     const [rows]: any = await pool.query(
-      `SELECT id, patient_name, email, appointment_date, time_slot, health_concern, status, meet_link FROM online_appointments WHERE phone = ? AND appointment_date >= ? AND status IN ('confirmed', 'rescheduled') AND payment_status = 'paid' ORDER BY appointment_date ASC`,
-      [phone, today]
+      `SELECT id, patient_name, email, clinic_id, appointment_date, time_slot, health_concern, status, meet_link 
+       FROM online_appointments 
+       WHERE (id = ? OR (phone = ? AND phone != '') OR (clinic_id IS NOT NULL AND clinic_id != '' AND clinic_id = ?)) 
+         AND (appointment_date >= ? OR appointment_date IS NULL) 
+         AND status IN ('confirmed', 'rescheduled') 
+         AND payment_status = 'paid' 
+       ORDER BY appointment_date ASC`,
+      [appointmentId || '', phone || '', clinicId || '', today]
     );
     
     const appointments = rows.map((r: any) => {
@@ -2453,11 +2548,11 @@ app.post('/api/appointments/lookup', async (req, res) => {
       return {
         appointmentId: r.id, patientName: r.patient_name, maskedEmail,
         date: r.appointment_date, timeSlot: r.time_slot,
-        healthConcern: r.health_concern, status: r.status
+        healthConcern: r.health_concern, status: r.status, clinicId: r.clinic_id
       };
     });
     
-    res.json({ appointments });
+    res.json({ appointments, clinicId });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -2833,13 +2928,40 @@ app.post('/api/appointments/refund', requireAdminAuth, async (req: AuthRequest, 
 // 13. Patient booking history
 app.post('/api/appointments/history', async (req, res) => {
   try {
-    const { phone } = req.body;
-    if (!phone) return res.status(400).json({ error: 'Phone required' });
+    const { phone, pid } = req.body;
+    if (!phone && !pid) return res.status(400).json({ error: 'Phone or PID required' });
+
+    let clinicId = pid || null;
+    if (!clinicId && phone) {
+      const [pRows]: any = await pool.query(
+        `SELECT clinic_id FROM patient_registry WHERE phone = ? LIMIT 1`,
+        [phone]
+      );
+      if (pRows.length > 0) clinicId = pRows[0].clinic_id;
+    }
+
     const [rows]: any = await pool.query(
-      `SELECT id, appointment_date, time_slot, health_concern, status, payment_status, is_follow_up_free, created_at FROM online_appointments WHERE phone = ? AND payment_status = 'paid' ORDER BY created_at DESC LIMIT 10`,
-      [phone]
+      `SELECT id, appointment_date, time_slot, health_concern, status, payment_status, is_follow_up_free, clinic_id, created_at 
+       FROM online_appointments 
+       WHERE ((phone = ? AND phone != '') OR (clinic_id IS NOT NULL AND clinic_id != '' AND clinic_id = ?)) 
+         AND payment_status = 'paid' 
+       ORDER BY created_at DESC LIMIT 10`,
+      [phone || '', clinicId || '']
     );
-    res.json({ history: rows });
+
+    const history = rows.map((r: any) => ({
+      id: r.id,
+      date: r.appointment_date,
+      time: r.time_slot,
+      healthConcern: r.health_concern,
+      status: r.status,
+      paymentStatus: r.payment_status,
+      isFollowUpFree: Boolean(r.is_follow_up_free),
+      clinicId: r.clinic_id,
+      createdAt: r.created_at
+    }));
+
+    res.json({ history, clinicId });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

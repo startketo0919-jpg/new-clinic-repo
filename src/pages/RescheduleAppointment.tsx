@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Calendar, Clock, Phone, ShieldCheck, ArrowLeft, RefreshCw, CheckCircle2, ChevronRight, CalendarCheck, AlertCircle } from 'lucide-react';
 import { format, addDays, startOfToday, isSameDay } from 'date-fns';
@@ -10,6 +11,7 @@ type Appointment = {
   concern: string;
   status: string;
   maskedEmail: string;
+  clinicId?: string;
 };
 
 type Slot = {
@@ -18,6 +20,7 @@ type Slot = {
 };
 
 export default function RescheduleAppointment() {
+  const [searchParams] = useSearchParams();
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1); // 4 is success
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -50,21 +53,14 @@ export default function RescheduleAppointment() {
     setAvailableDates(dates);
   }, []);
 
-  const handleLookup = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const performLookup = async (lookupPhone: string, targetApptId?: string) => {
     setError('');
-    
-    if (!/^[6-9]\d{9}$/.test(phone)) {
-      setError('Please enter a valid 10-digit mobile number');
-      return;
-    }
-
     setLoading(true);
     try {
       const res = await fetch('/api/appointments/lookup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone })
+        body: JSON.stringify({ phone: lookupPhone, appointmentId: targetApptId })
       });
       const data = await res.json();
       setLoading(false);
@@ -77,7 +73,8 @@ export default function RescheduleAppointment() {
             timeSlot: a.timeSlot,
             concern: a.healthConcern || a.concern,
             status: a.status,
-            maskedEmail: a.maskedEmail
+            maskedEmail: a.maskedEmail,
+            clinicId: a.clinicId
           }));
           setAppointments(mapped);
         } else {
@@ -91,6 +88,24 @@ export default function RescheduleAppointment() {
       setLoading(false);
       setError('Network error. Please try again.');
     }
+  };
+
+  useEffect(() => {
+    const urlPhone = searchParams.get('phone');
+    const urlApptId = searchParams.get('appointmentId') || searchParams.get('id');
+    if (urlPhone && /^[6-9]\d{9}$/.test(urlPhone)) {
+      setPhone(urlPhone);
+      performLookup(urlPhone, urlApptId || undefined);
+    }
+  }, [searchParams]);
+
+  const handleLookup = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!/^[6-9]\d{9}$/.test(phone)) {
+      setError('Please enter a valid 10-digit mobile number');
+      return;
+    }
+    await performLookup(phone);
   };
 
   const handleSelectAppointment = async (appt: Appointment) => {
@@ -294,7 +309,14 @@ export default function RescheduleAppointment() {
                       <div key={appt.id} className="border border-slate-200 rounded-xl p-4 bg-slate-50 flex flex-col gap-3">
                         <div className="flex justify-between items-start">
                           <div>
-                            <p className="font-semibold text-slate-800">{format(new Date(appt.date), 'MMM d, yyyy')} at {appt.timeSlot}</p>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <p className="font-semibold text-slate-800">{format(new Date(appt.date), 'MMM d, yyyy')} at {appt.timeSlot}</p>
+                              {appt.clinicId && (
+                                <span className="text-[11px] font-mono font-bold bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded">
+                                  {appt.clinicId}
+                                </span>
+                              )}
+                            </div>
                             <p className="text-sm text-slate-500">For: {appt.concern}</p>
                           </div>
                           <span className="bg-emerald-100 text-emerald-700 text-xs font-bold px-2.5 py-1 rounded-full uppercase">
