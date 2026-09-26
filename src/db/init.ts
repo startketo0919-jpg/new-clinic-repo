@@ -199,7 +199,8 @@ export async function initDb() {
     `ALTER TABLE settings ADD COLUMN IF NOT EXISTS google_oauth_token_expiry TEXT;`,
     `ALTER TABLE settings ADD COLUMN IF NOT EXISTS google_calendar_email TEXT;`,
     `ALTER TABLE settings ADD COLUMN IF NOT EXISTS notification_emails TEXT;`,
-    `ALTER TABLE settings ADD COLUMN IF NOT EXISTS follow_up_free_days INT DEFAULT 7;`
+    `ALTER TABLE settings ADD COLUMN IF NOT EXISTS follow_up_free_days INT DEFAULT 7;`,
+    `ALTER TABLE settings ADD COLUMN IF NOT EXISTS follow_up_fee INT DEFAULT 0;`
   ];
 
   for (const alterQ of alterSettingsQueries) {

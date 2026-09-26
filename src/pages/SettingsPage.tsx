@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useClinic } from '../context/ClinicContext';
 import { useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Save, Plus, Trash2, ShieldAlert, Send, Package, CreditCard, Video, Bell, CheckCircle2, XCircle } from 'lucide-react';
+import { LayoutDashboard, Save, Plus, Trash2, ShieldAlert, Send, Package, CreditCard, Video, Bell, CheckCircle2, XCircle, IndianRupee } from 'lucide-react';
 import { WhatsAppTemplate } from '../types';
 
 export default function SettingsPage() {
@@ -182,6 +182,7 @@ export default function SettingsPage() {
           <button onClick={() => setActiveTab('delhivery')} className={`text-left px-4 py-2 rounded-lg text-sm font-medium ${activeTab === 'delhivery' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-50'}`}>Delhivery API</button>
           <button onClick={() => setActiveTab('bulk')} className={`text-left px-4 py-2 rounded-lg text-sm font-medium ${activeTab === 'bulk' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-50'}`}>Bulk Messages</button>
           <button onClick={() => setActiveTab('razorpay')} className={`text-left px-4 py-2 rounded-lg text-sm font-medium ${activeTab === 'razorpay' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-50'}`}>Razorpay API</button>
+          <button onClick={() => setActiveTab('fees')} className={`text-left px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-1.5 ${activeTab === 'fees' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-50'}`}><IndianRupee className="w-3.5 h-3.5" /> Fee Decider</button>
           <button onClick={() => setActiveTab('google')} className={`text-left px-4 py-2 rounded-lg text-sm font-medium ${activeTab === 'google' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-50'}`}>Google Meet</button>
           <button onClick={() => setActiveTab('notifications')} className={`text-left px-4 py-2 rounded-lg text-sm font-medium ${activeTab === 'notifications' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-50'}`}>Notifications</button>
         </div>
@@ -559,27 +560,135 @@ export default function SettingsPage() {
                 </div>
 
                 <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
-                  <h4 className="font-semibold text-slate-700 mb-3">Consultation Rules</h4>
-                  <div className="grid grid-cols-2 gap-4">
+                  <h4 className="font-semibold text-slate-700 mb-3 flex items-center gap-1.5"><IndianRupee className="w-4 h-4 text-indigo-600" /> Fee Decider & Consultation Pricing</h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">Consultation Fee (₹)</label>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Standard Fee (₹)</label>
                       <input 
                         type="number" 
-                        value={state.settings.consultationFee ? state.settings.consultationFee / 100 : ''} 
-                        onChange={e => updateSettings({ consultationFee: parseFloat(e.target.value) * 100 })} 
+                        value={state.settings.consultationFee !== undefined ? state.settings.consultationFee / 100 : 199} 
+                        onChange={e => updateSettings({ consultationFee: (parseFloat(e.target.value) || 0) * 100 })} 
                         className="w-full px-4 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500" 
-                        placeholder="e.g. 500"
+                        placeholder="199"
+                        min="0"
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">Follow-up Free Days</label>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">7-Day Window Fee (₹)</label>
+                      <input 
+                        type="number" 
+                        value={state.settings.followUpFee !== undefined ? state.settings.followUpFee / 100 : 0} 
+                        onChange={e => updateSettings({ followUpFee: (parseFloat(e.target.value) || 0) * 100 })} 
+                        className="w-full px-4 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500" 
+                        placeholder="0 (Free)"
+                        min="0"
+                      />
+                      <span className="text-[11px] text-slate-400">Set 0 for FREE</span>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Follow-up Window (Days)</label>
                       <input 
                         type="number" 
                         value={state.settings.followUpFreeDays || 7} 
-                        onChange={e => updateSettings({ followUpFreeDays: parseInt(e.target.value, 10) })} 
+                        onChange={e => updateSettings({ followUpFreeDays: parseInt(e.target.value, 10) || 7 })} 
                         className="w-full px-4 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500" 
-                        placeholder="e.g. 7"
+                        placeholder="7"
+                        min="1"
                       />
+                      <span className="text-[11px] text-slate-400">Default 7 days</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'fees' && (
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+              <div className="flex items-center justify-between mb-6 border-b border-slate-100 pb-4">
+                <div>
+                  <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                    <IndianRupee className="w-6 h-6 text-indigo-600" /> Fee Decider & Consultation Pricing
+                  </h3>
+                  <p className="text-slate-500 text-sm mt-1">Configure appointment fees for normal bookings and the 7-day follow-up window.</p>
+                </div>
+              </div>
+
+              <div className="space-y-6 max-w-2xl">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 bg-slate-50 p-6 rounded-2xl border border-slate-200">
+                  <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-sm font-bold text-slate-800">Standard Consultation Fee</label>
+                        <span className="text-xs px-2 py-0.5 rounded font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">Normal</span>
+                      </div>
+                      <p className="text-xs text-slate-500 mb-3">Charged for new appointments or appointments outside the follow-up window.</p>
+                    </div>
+                    <div className="relative mt-2">
+                      <span className="absolute left-3.5 top-2.5 text-slate-400 font-bold text-base">₹</span>
+                      <input 
+                        type="number" 
+                        value={state.settings.consultationFee !== undefined ? state.settings.consultationFee / 100 : 199} 
+                        onChange={e => updateSettings({ consultationFee: (parseFloat(e.target.value) || 0) * 100 })} 
+                        className="w-full pl-9 pr-4 py-2.5 border border-slate-200 rounded-lg text-lg font-bold text-slate-800 focus:ring-2 focus:ring-indigo-500 outline-none" 
+                        placeholder="199"
+                        min="0"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-sm font-bold text-slate-800">7-Day Window Fee</label>
+                        <span className="text-xs px-2 py-0.5 rounded font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">Follow-up</span>
+                      </div>
+                      <p className="text-xs text-slate-500 mb-3">Charged within the 7-day follow-up window. Set to <strong>0 for completely FREE</strong>.</p>
+                    </div>
+                    <div className="relative mt-2">
+                      <span className="absolute left-3.5 top-2.5 text-slate-400 font-bold text-base">₹</span>
+                      <input 
+                        type="number" 
+                        value={state.settings.followUpFee !== undefined ? state.settings.followUpFee / 100 : 0} 
+                        onChange={e => updateSettings({ followUpFee: (parseFloat(e.target.value) || 0) * 100 })} 
+                        className="w-full pl-9 pr-4 py-2.5 border border-slate-200 rounded-lg text-lg font-bold text-slate-800 focus:ring-2 focus:ring-indigo-500 outline-none" 
+                        placeholder="0"
+                        min="0"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="md:col-span-2 bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+                    <label className="block text-sm font-bold text-slate-800 mb-1">Follow-up Window Period (Days)</label>
+                    <p className="text-xs text-slate-500 mb-3">How many days after a previous consultation/clinic visit the patient qualifies for the follow-up rate.</p>
+                    <div className="flex items-center gap-3">
+                      <input 
+                        type="number" 
+                        value={state.settings.followUpFreeDays || 7} 
+                        onChange={e => updateSettings({ followUpFreeDays: parseInt(e.target.value, 10) || 7 })} 
+                        className="w-32 px-4 py-2.5 border border-slate-200 rounded-lg text-base font-bold text-slate-800 focus:ring-2 focus:ring-indigo-500 outline-none" 
+                        placeholder="7"
+                        min="1"
+                      />
+                      <span className="text-sm text-slate-600 font-medium">days from last visit</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-indigo-50 border border-indigo-100 p-5 rounded-xl">
+                  <h4 className="font-bold text-indigo-950 text-sm mb-2">Live Pricing Summary:</h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                    <div className="bg-white p-3 rounded-lg border border-indigo-100">
+                      <span className="text-xs text-slate-500 block">Normal Appointment</span>
+                      <span className="text-lg font-extrabold text-slate-800">
+                        ₹{(state.settings.consultationFee !== undefined ? state.settings.consultationFee / 100 : 199)}
+                      </span>
+                    </div>
+                    <div className="bg-white p-3 rounded-lg border border-indigo-100">
+                      <span className="text-xs text-slate-500 block">Within {state.settings.followUpFreeDays || 7}-Day Window</span>
+                      <span className="text-lg font-extrabold text-emerald-700">
+                        {((state.settings.followUpFee || 0) === 0 ? 'FREE (₹0)' : '₹' + ((state.settings.followUpFee || 0) / 100))}
+                      </span>
                     </div>
                   </div>
                 </div>

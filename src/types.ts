@@ -105,6 +105,7 @@ export interface ClinicState {
     googleCalendarEmail?: string;
     notificationEmails?: string;
     followUpFreeDays?: number;
+    followUpFee?: number;
   };
   templates: WhatsAppTemplate[];
 }

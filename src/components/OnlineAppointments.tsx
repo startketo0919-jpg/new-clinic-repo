@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Calendar, Video, Phone, Mail, Download, RefreshCw, Search, Filter, ChevronDown, ChevronUp, Check, X, Trash2, FileText, MapPin, ExternalLink, CalendarDays, List } from 'lucide-react';
+import { Calendar, Video, Phone, Mail, Download, RefreshCw, Search, Filter, ChevronDown, ChevronUp, Check, X, Trash2, FileText, MapPin, ExternalLink, CalendarDays, List, IndianRupee } from 'lucide-react';
 import { format, startOfMonth, endOfMonth, startOfWeek, endOfWeek, eachDayOfInterval, isSameMonth, isSameDay, isToday, addMonths, subMonths, parseISO } from 'date-fns';
 import { cn } from '../lib/utils';
 import { getLocalTodayString } from '../lib/dateUtils';
@@ -40,6 +40,64 @@ export default function OnlineAppointments({ userRole }: { userRole?: string | n
 
   // Calendar State
   const [currentMonth, setCurrentMonth] = useState(new Date());
+
+  // Fee Decider Modal
+  const [showFeeModal, setShowFeeModal] = useState(false);
+  const [feeSettings, setFeeSettings] = useState({
+    normalFee: 199,
+    followUpFee: 0,
+    followUpDays: 7
+  });
+  const [savingFees, setSavingFees] = useState(false);
+
+  const fetchFees = async () => {
+    try {
+      const res = await fetch('/api/appointments/config');
+      if (res.ok) {
+        const data = await res.json();
+        setFeeSettings({
+          normalFee: data.normalFee ?? 199,
+          followUpFee: data.followUpFee ?? 0,
+          followUpDays: data.followUpDays ?? 7
+        });
+      }
+    } catch (e) {
+      console.error('Failed to load fees:', e);
+    }
+  };
+
+  useEffect(() => {
+    fetchFees();
+  }, []);
+
+  const handleSaveFees = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingFees(true);
+    try {
+      const res = await fetch('/api/action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'UPDATE_SETTINGS',
+          payload: {
+            consultationFee: (feeSettings.normalFee || 0) * 100,
+            followUpFee: (feeSettings.followUpFee || 0) * 100,
+            followUpFreeDays: feeSettings.followUpDays || 7
+          }
+        })
+      });
+      if (res.ok) {
+        setShowFeeModal(false);
+        alert('Consultation fees updated successfully!');
+      } else {
+        alert('Failed to save fees');
+      }
+    } catch (err: any) {
+      alert('Error saving fees: ' + err.message);
+    } finally {
+      setSavingFees(false);
+    }
+  };
 
   const fetchAppointments = async () => {
     setLoading(true);
@@ -206,19 +264,31 @@ export default function OnlineAppointments({ userRole }: { userRole?: string | n
           <p className="text-slate-500 text-sm mt-1">Manage video consultations and digital payments</p>
         </div>
 
-        <div className="flex bg-slate-200/70 p-1 rounded-xl">
-          <button
-            onClick={() => setViewMode('table')}
-            className={cn("px-4 py-1.5 text-sm font-semibold rounded-lg transition-colors flex items-center gap-2", viewMode === 'table' ? "bg-white text-indigo-700 shadow-sm" : "text-slate-500 hover:text-slate-700")}
-          >
-            <List className="w-4 h-4" /> Table View
-          </button>
-          <button
-            onClick={() => setViewMode('calendar')}
-            className={cn("px-4 py-1.5 text-sm font-semibold rounded-lg transition-colors flex items-center gap-2", viewMode === 'calendar' ? "bg-white text-indigo-700 shadow-sm" : "text-slate-500 hover:text-slate-700")}
-          >
-            <CalendarDays className="w-4 h-4" /> Calendar View
-          </button>
+        <div className="flex items-center gap-2">
+          {userRole === 'admin' && (
+            <button
+              onClick={() => { fetchFees(); setShowFeeModal(true); }}
+              className="px-3.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-sm font-semibold rounded-xl border border-indigo-200 transition-colors flex items-center gap-1.5 shadow-sm"
+              title="Configure consultation fees"
+            >
+              <IndianRupee className="w-4 h-4" /> Fee Decider
+            </button>
+          )}
+
+          <div className="flex bg-slate-200/70 p-1 rounded-xl">
+            <button
+              onClick={() => setViewMode('table')}
+              className={cn("px-4 py-1.5 text-sm font-semibold rounded-lg transition-colors flex items-center gap-2", viewMode === 'table' ? "bg-white text-indigo-700 shadow-sm" : "text-slate-500 hover:text-slate-700")}
+            >
+              <List className="w-4 h-4" /> Table View
+            </button>
+            <button
+              onClick={() => setViewMode('calendar')}
+              className={cn("px-4 py-1.5 text-sm font-semibold rounded-lg transition-colors flex items-center gap-2", viewMode === 'calendar' ? "bg-white text-indigo-700 shadow-sm" : "text-slate-500 hover:text-slate-700")}
+            >
+              <CalendarDays className="w-4 h-4" /> Calendar View
+            </button>
+          </div>
         </div>
       </div>
 
@@ -570,6 +640,100 @@ export default function OnlineAppointments({ userRole }: { userRole?: string | n
           </div>
         )}
       </div>
+
+      {/* Fee Decider Modal */}
+      {showFeeModal && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-100 max-w-lg w-full overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            <div className="p-6 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                  <IndianRupee className="w-5 h-5 text-indigo-600" /> Fee Decider
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">Set consultation fees for normal bookings vs. 7-day follow-up window.</p>
+              </div>
+              <button 
+                onClick={() => setShowFeeModal(false)}
+                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveFees} className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-bold text-slate-800 mb-1">Standard Consultation Fee (₹)</label>
+                <p className="text-xs text-slate-500 mb-2">Charged for normal/new appointments or bookings outside the follow-up window.</p>
+                <div className="relative">
+                  <span className="absolute left-3 top-2.5 text-slate-400 font-bold">₹</span>
+                  <input 
+                    type="number"
+                    min="0"
+                    value={feeSettings.normalFee}
+                    onChange={e => setFeeSettings(prev => ({ ...prev, normalFee: parseFloat(e.target.value) || 0 }))}
+                    className="w-full pl-8 pr-4 py-2.5 border border-slate-200 rounded-xl text-base font-bold text-slate-800 focus:ring-2 focus:ring-indigo-500 outline-none"
+                    placeholder="199"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-bold text-slate-800 mb-1">Follow-up Window Fee (₹)</label>
+                <p className="text-xs text-slate-500 mb-2">Charged within the 7-day window. Set to <strong>0 for completely FREE</strong>.</p>
+                <div className="relative">
+                  <span className="absolute left-3 top-2.5 text-slate-400 font-bold">₹</span>
+                  <input 
+                    type="number"
+                    min="0"
+                    value={feeSettings.followUpFee}
+                    onChange={e => setFeeSettings(prev => ({ ...prev, followUpFee: parseFloat(e.target.value) || 0 }))}
+                    className="w-full pl-8 pr-4 py-2.5 border border-slate-200 rounded-xl text-base font-bold text-slate-800 focus:ring-2 focus:ring-indigo-500 outline-none"
+                    placeholder="0"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-bold text-slate-800 mb-1">Follow-up Window (Days)</label>
+                <p className="text-xs text-slate-500 mb-2">Period after previous visit/appointment eligible for follow-up fee.</p>
+                <input 
+                  type="number"
+                  min="1"
+                  value={feeSettings.followUpDays}
+                  onChange={e => setFeeSettings(prev => ({ ...prev, followUpDays: parseInt(e.target.value, 10) || 7 }))}
+                  className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-base font-bold text-slate-800 focus:ring-2 focus:ring-indigo-500 outline-none"
+                  placeholder="7"
+                  required
+                />
+              </div>
+
+              <div className="bg-indigo-50 border border-indigo-100 p-3.5 rounded-xl text-xs text-indigo-900 space-y-1">
+                <div>• Normal Fee: <strong>₹{feeSettings.normalFee}</strong></div>
+                <div>• Follow-up Fee ({feeSettings.followUpDays} days): <strong>{feeSettings.followUpFee === 0 ? 'FREE (₹0)' : `₹${feeSettings.followUpFee}`}</strong></div>
+              </div>
+
+              <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowFeeModal(false)}
+                  className="px-4 py-2 rounded-xl text-sm font-semibold text-slate-600 hover:bg-slate-100 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingFees}
+                  className="px-6 py-2 rounded-xl text-sm font-semibold bg-indigo-600 hover:bg-indigo-700 text-white transition-colors shadow-sm disabled:opacity-50"
+                >
+                  {savingFees ? 'Saving...' : 'Save Fees'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

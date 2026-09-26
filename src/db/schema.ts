@@ -84,6 +84,7 @@ export const settings = mysqlTable("settings", {
   googleCalendarEmail: text("google_calendar_email"),
   notificationEmails: text("notification_emails"),
   followUpFreeDays: int("follow_up_free_days").default(7),
+  followUpFee: int("follow_up_fee").default(0),
 });
 
 export const whatsappMessages = mysqlTable("whatsapp_messages", {

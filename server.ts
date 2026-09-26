@@ -1966,18 +1966,120 @@ async function sendPatientEmail(s: any, to: string, subject: string, html: strin
   });
 }
 
-// Helper: Check 7-day follow-up eligibility
-async function checkFollowUpEligibility(phone: string, freeDays: number): Promise<boolean> {
-  const [rows]: any = await pool.query(
-    `SELECT appointment_date FROM online_appointments WHERE phone = ? AND payment_status = 'paid' AND status IN ('confirmed','completed') ORDER BY appointment_date DESC LIMIT 1`,
-    [phone]
-  );
-  if (rows.length === 0) return false;
-  const lastDate = new Date(rows[0].appointment_date);
+// Helper: Check 7-day follow-up eligibility across all sources
+async function checkFollowUpEligibility(phone: string, freeDays: number, manualLastVisit?: string): Promise<{ isEligible: boolean; lastDate?: string; source?: string }> {
   const now = new Date();
-  const diffDays = Math.floor((now.getTime() - lastDate.getTime()) / (1000 * 60 * 60 * 24));
-  return diffDays <= freeDays;
+  
+  // 1. Check manual last visit date if provided by patient
+  if (manualLastVisit) {
+    const manualDate = new Date(manualLastVisit);
+    if (!isNaN(manualDate.getTime())) {
+      const diffDays = Math.floor((now.getTime() - manualDate.getTime()) / (1000 * 60 * 60 * 24));
+      if (diffDays >= 0 && diffDays <= freeDays) {
+        return { isEligible: true, lastDate: manualLastVisit, source: 'manual_visit_date' };
+      }
+    }
+  }
+
+  if (phone) {
+    // 2. Check previous paid or completed online appointments
+    try {
+      const [onlineRows]: any = await pool.query(
+        `SELECT appointment_date FROM online_appointments WHERE phone = ? AND (payment_status = 'paid' OR is_follow_up_free = 1) AND status IN ('confirmed','completed') ORDER BY appointment_date DESC LIMIT 1`,
+        [phone]
+      );
+      if (onlineRows.length > 0 && onlineRows[0].appointment_date) {
+        const lastDate = new Date(onlineRows[0].appointment_date);
+        if (!isNaN(lastDate.getTime())) {
+          const diffDays = Math.floor((now.getTime() - lastDate.getTime()) / (1000 * 60 * 60 * 24));
+          if (diffDays >= 0 && diffDays <= freeDays) {
+            return { isEligible: true, lastDate: onlineRows[0].appointment_date, source: 'online_appointments' };
+          }
+        }
+      }
+    } catch (e) {
+      console.error('[Eligibility] Online appointments check error:', e);
+    }
+
+    // 3. Check physical clinic patient registry
+    try {
+      const [regRows]: any = await pool.query(
+        `SELECT last_visited, first_visit FROM patient_registry WHERE phone = ? ORDER BY COALESCE(last_visited, first_visit) DESC LIMIT 1`,
+        [phone]
+      );
+      if (regRows.length > 0) {
+        const visitDate = regRows[0].last_visited || regRows[0].first_visit;
+        if (visitDate) {
+          const lastDate = new Date(visitDate);
+          if (!isNaN(lastDate.getTime())) {
+            const diffDays = Math.floor((now.getTime() - lastDate.getTime()) / (1000 * 60 * 60 * 24));
+            if (diffDays >= 0 && diffDays <= freeDays) {
+              return { isEligible: true, lastDate: lastDate.toISOString().split('T')[0], source: 'patient_registry' };
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.error('[Eligibility] Registry check error:', e);
+    }
+
+    // 4. Check in-clinic appointments
+    try {
+      const [aptRows]: any = await pool.query(
+        `SELECT date FROM appointments WHERE phone = ? ORDER BY date DESC LIMIT 1`,
+        [phone]
+      );
+      if (aptRows.length > 0 && aptRows[0].date) {
+        const lastDate = new Date(aptRows[0].date);
+        if (!isNaN(lastDate.getTime())) {
+          const diffDays = Math.floor((now.getTime() - lastDate.getTime()) / (1000 * 60 * 60 * 24));
+          if (diffDays >= 0 && diffDays <= freeDays) {
+            return { isEligible: true, lastDate: aptRows[0].date, source: 'clinic_appointments' };
+          }
+        }
+      }
+    } catch (e) {
+      console.error('[Eligibility] Clinic appointments check error:', e);
+    }
+  }
+
+  return { isEligible: false };
 }
+
+// Public configuration and pricing endpoint for booking wizard
+app.get('/api/appointments/config', async (req, res) => {
+  try {
+    const s = await getAppointmentSettings();
+    const normalFeePaise = s.consultation_fee !== undefined && s.consultation_fee !== null ? s.consultation_fee : 19900;
+    const followUpFeePaise = s.follow_up_fee !== undefined && s.follow_up_fee !== null ? s.follow_up_fee : 0;
+    const followUpDays = s.follow_up_free_days !== undefined && s.follow_up_free_days !== null ? s.follow_up_free_days : 7;
+
+    const phone = (req.query.phone as string) || '';
+    const lastVisitDate = (req.query.lastVisitDate as string) || '';
+
+    let isFollowUp = false;
+    let followUpDetails: any = null;
+
+    if (phone.length === 10 || lastVisitDate) {
+      followUpDetails = await checkFollowUpEligibility(phone, followUpDays, lastVisitDate);
+      isFollowUp = followUpDetails.isEligible;
+    }
+
+    const calculatedFeePaise = isFollowUp ? followUpFeePaise : normalFeePaise;
+
+    res.json({
+      normalFee: normalFeePaise / 100,
+      followUpFee: followUpFeePaise / 100,
+      followUpDays,
+      isFollowUp,
+      calculatedFee: calculatedFeePaise / 100,
+      isFree: calculatedFeePaise === 0,
+      details: followUpDetails
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // Helper: Generate next PID
 async function generateClinicId(): Promise<string> {
@@ -2012,19 +2114,24 @@ app.post('/api/appointments/create-order', async (req, res) => {
     }
     
     const s = await getAppointmentSettings();
-    const freeDays = s.follow_up_free_days || 7;
-    const isFollowUpFree = await checkFollowUpEligibility(phone, freeDays);
-    const fee = isFollowUpFree ? 0 : (s.consultation_fee || 19900);
+    const freeDays = s.follow_up_free_days !== undefined && s.follow_up_free_days !== null ? s.follow_up_free_days : 7;
+    const eligibility = await checkFollowUpEligibility(phone, freeDays, lastVisitDate);
+    const isFollowUp = eligibility.isEligible;
+
+    const normalFeePaise = s.consultation_fee !== undefined && s.consultation_fee !== null ? s.consultation_fee : 19900;
+    const followUpFeePaise = s.follow_up_fee !== undefined && s.follow_up_fee !== null ? s.follow_up_fee : 0;
+    const fee = isFollowUp ? followUpFeePaise : normalFeePaise;
+    const isFree = fee === 0;
     
     const appointmentId = 'APT-' + crypto.randomUUID().substring(0, 8);
     
     await pool.query(
       `INSERT INTO online_appointments (id, patient_name, phone, email, patient_type, short_address, last_visit_date, health_concern, health_concern_detail, wants_courier_medicine, courier_address, courier_contact, courier_pincode, payment_amount, payment_status, is_follow_up_free, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_slot', NOW())`,
-      [appointmentId, patientName, phone, email, patientType, shortAddress || null, lastVisitDate || null, healthConcern, healthConcernDetail || null, wantsCourierMedicine || false, courierAddress || null, courierContact || phone, courierPincode || null, fee, isFollowUpFree ? 'paid' : 'pending', isFollowUpFree]
+      [appointmentId, patientName, phone, email, patientType, shortAddress || null, lastVisitDate || null, healthConcern, healthConcernDetail || null, wantsCourierMedicine || false, courierAddress || null, courierContact || phone, courierPincode || null, fee, isFree ? 'paid' : 'pending', isFollowUp]
     );
     
-    if (isFollowUpFree) {
-      return res.json({ appointmentId, amount: 0, isFree: true });
+    if (isFree) {
+      return res.json({ appointmentId, amount: 0, isFree: true, isFollowUp });
     }
     
     // Create Razorpay order
@@ -2040,12 +2147,12 @@ app.post('/api/appointments/create-order', async (req, res) => {
       amount: fee,
       currency: 'INR',
       receipt: appointmentId,
-      notes: { appointmentId, patientName, phone }
+      notes: { appointmentId, patientName, phone, isFollowUp: isFollowUp ? 'yes' : 'no' }
     });
     
     await pool.query(`UPDATE online_appointments SET razorpay_order_id = ? WHERE id = ?`, [order.id, appointmentId]);
     
-    res.json({ appointmentId, orderId: order.id, amount: fee, currency: 'INR', keyId });
+    res.json({ appointmentId, orderId: order.id, amount: fee, currency: 'INR', keyId, isFollowUp, isFree: false });
   } catch (err: any) {
     console.error('[Appointment] Create order error:', err);
     res.status(500).json({ error: 'Failed to create appointment order' });

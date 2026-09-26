@@ -86,11 +86,40 @@ export default function BookAppointment() {
   // Final Confirmation Data
   const [confirmationData, setConfirmationData] = useState<any>(null);
   
+  // Dynamic Pricing Configuration from Admin Settings
+  const [pricingConfig, setPricingConfig] = useState({
+    normalFee: 199,
+    followUpFee: 0,
+    followUpDays: 7,
+    isFollowUp: false,
+    calculatedFee: 199,
+    isFree: false
+  });
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const updateForm = (key: keyof FormData, value: any) => {
     setFormData(prev => ({ ...prev, [key]: value }));
   };
+
+  // Fetch dynamic pricing whenever phone or lastVisitDate changes
+  useEffect(() => {
+    const fetchConfig = async () => {
+      try {
+        const query = new URLSearchParams();
+        if (formData.phone && formData.phone.length === 10) query.set('phone', formData.phone);
+        if (formData.lastVisitDate) query.set('lastVisitDate', formData.lastVisitDate);
+        const res = await fetch(`/api/appointments/config?${query.toString()}`);
+        if (res.ok) {
+          const data = await res.json();
+          setPricingConfig(data);
+        }
+      } catch (e) {
+        console.error('Failed to load pricing config:', e);
+      }
+    };
+    fetchConfig();
+  }, [formData.phone, formData.lastVisitDate, formData.isExisting]);
 
   const nextStep = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -207,10 +236,11 @@ export default function BookAppointment() {
   // -------------------------------------------------------------
   // STEP 3 HANDLERS
   // -------------------------------------------------------------
-  const isFollowUp = formData.isExisting && formData.lastVisitDate && 
-    (new Date().getTime() - new Date(formData.lastVisitDate).getTime()) < (7 * 24 * 60 * 60 * 1000);
+  const isFollowUp = pricingConfig.isFollowUp || (formData.isExisting && formData.lastVisitDate && 
+    (new Date().getTime() - new Date(formData.lastVisitDate).getTime()) < (pricingConfig.followUpDays * 24 * 60 * 60 * 1000));
   
-  const amount = isFollowUp ? 0 : 199;
+  const effectiveFee = isFollowUp ? pricingConfig.followUpFee : pricingConfig.normalFee;
+  const isFree = isFollowUp && pricingConfig.followUpFee === 0;
 
   const handlePayment = async () => {
     setLoading(true);
@@ -259,7 +289,7 @@ export default function BookAppointment() {
         }).catch(err => console.error("Upload error:", err));
       }
 
-      if (orderData.isFree || amount === 0) {
+      if (orderData.isFree || isFree || effectiveFee === 0) {
         // Free follow-up -> auto advance
         updateForm('paymentStatus', 'completed');
         setLoading(false);
@@ -287,10 +317,10 @@ export default function BookAppointment() {
       // Initialize Razorpay
       const options = {
         key: orderData.keyId || 'rzp_test_dummy',
-        amount: orderData.amount || amount * 100,
+        amount: orderData.amount || effectiveFee * 100,
         currency: 'INR',
         name: 'Krishna Homoeopathic Clinic',
-        description: 'Online Video Consultation',
+        description: isFollowUp ? 'Online Follow-up Consultation' : 'Online Video Consultation',
         order_id: orderData.orderId,
         prefill: {
           name: formData.patientName,
@@ -564,9 +594,17 @@ END:VCALENDAR`;
                         />
                       </div>
                       {formData.phone.length === 10 && (
-                        <button type="button" onClick={handleCheckHistory} className="mt-2 text-xs text-teal-600 font-semibold flex items-center gap-1 hover:underline">
-                          <History className="w-3 h-3" /> Check History
-                        </button>
+                        <div className="flex flex-col gap-1.5 mt-2">
+                          {pricingConfig.isFollowUp && (
+                            <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5">
+                              <span>✨</span>
+                              <span>Follow-up window active: {pricingConfig.isFree ? 'FREE Consultation' : `₹${pricingConfig.followUpFee} Fee`} ({pricingConfig.followUpDays}-day window)</span>
+                            </div>
+                          )}
+                          <button type="button" onClick={handleCheckHistory} className="text-xs text-teal-600 font-semibold flex items-center gap-1 hover:underline w-fit">
+                            <History className="w-3 h-3" /> Check History
+                          </button>
+                        </div>
                       )}
                     </div>
                     <div>
@@ -828,17 +866,17 @@ END:VCALENDAR`;
                   <div>
                     <h3 className="font-bold text-lg text-teal-900">Consultation Fee</h3>
                     <p className="text-sm text-teal-700 mt-1">
-                      {isFollowUp ? 'Follow-up within 7 days' : 'Standard online video consultation'}
+                      {isFollowUp ? `Follow-up within ${pricingConfig.followUpDays}-day window` : 'Standard online video consultation'}
                     </p>
                   </div>
                   <div className="text-right">
-                    {isFollowUp ? (
+                    {isFree ? (
                       <div className="bg-emerald-100 text-emerald-800 px-4 py-2 rounded-lg font-bold text-xl inline-flex items-center gap-1">
                         FREE
                       </div>
                     ) : (
                       <div className="font-bold text-3xl text-teal-900 flex items-center">
-                        <IndianRupee className="w-6 h-6" /> 199
+                        <IndianRupee className="w-6 h-6" /> {effectiveFee}
                       </div>
                     )}
                   </div>
@@ -849,7 +887,7 @@ END:VCALENDAR`;
                     <ChevronLeft className="w-5 h-5" /> Back
                   </button>
                   <button onClick={handlePayment} disabled={loading} className="order-1 sm:order-2 bg-teal-600 hover:bg-teal-700 text-white font-semibold py-3 px-8 rounded-xl flex justify-center items-center gap-2 transition-all shadow-md disabled:opacity-50">
-                    {loading ? <RefreshCw className="w-5 h-5 animate-spin" /> : isFollowUp ? 'Continue to Slots' : 'Pay ₹199 & Continue'}
+                    {loading ? <RefreshCw className="w-5 h-5 animate-spin" /> : isFree ? 'Continue to Slots' : `Pay ₹${effectiveFee} & Continue`}
                     {!loading && <ChevronRight className="w-5 h-5" />}
                   </button>
                 </div>
