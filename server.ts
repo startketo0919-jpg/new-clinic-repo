@@ -9,7 +9,7 @@ import { createServer as createViteServer } from "vite";
 import { db, pool } from "./src/db/index.js";
 import { initDb } from "./src/db/init.js";
 import { hashPassword, verifyPassword, generateAuthToken, verifyAuthToken } from "./src/db/auth-utils.js";
-import { liveQueue, patientRegistry, users, appointments, settings, whatsappMessages, whatsappTemplates, delhiveryOrders, patientShipments } from "./src/db/schema.js";
+import { liveQueue, patientRegistry, users, appointments, settings, whatsappMessages, whatsappTemplates, delhiveryOrders, patientShipments, onlineAppointments, appointmentFiles, rescheduleOtps } from "./src/db/schema.js";
 import { eq, desc, asc, and } from "drizzle-orm";
 import { requireStaffAuth, requireAdminAuth, optionalAuth, AuthRequest } from "./src/middleware/auth.js";
 import { 
@@ -24,6 +24,12 @@ import {
   clearOtpVerifyFailures, 
   apiAntiAbuseLimiter 
 } from "./src/middleware/security.js";
+
+import { getGoogleAuthUrl, exchangeCodeForTokens, refreshAccessToken, createMeetEvent, deleteMeetEvent, updateMeetEvent } from './src/services/google-meet.js';
+import { buildAppointmentConfirmationEmail, buildAppointmentRescheduleEmail, buildStaffNotificationEmail, buildReminderEmail, buildRefundEmail, buildRescheduleOtpEmail } from './src/services/email-templates.js';
+import crypto from 'crypto';
+import fs from 'fs';
+import multer from 'multer';
 
 async function startServer() {
   try {
@@ -40,6 +46,18 @@ async function startServer() {
   app.use("/api", apiAntiAbuseLimiter);
   app.use(cors());
   app.use(express.json());
+
+  // File upload config for appointment reports
+  const uploadDir = path.join(process.cwd(), 'uploads', 'reports');
+  if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+  const reportUpload = multer({
+    dest: uploadDir,
+    limits: { fileSize: 20 * 1024 * 1024 }, // 20MB total
+    fileFilter: (req, file, cb) => {
+      const allowed = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'];
+      cb(null, allowed.includes(file.mimetype));
+    }
+  });
 
   let clients: express.Response[] = [];
   const notifyClients = () => {
@@ -68,9 +86,13 @@ async function startServer() {
       const dbSettings = await db.select().from(settings).where(eq(settings.id, "default")).limit(1);
       let dbUsers = await db.select().from(users);
 
-      if (!dbUsers.some(u => (u.username && u.username.toLowerCase() === 'suyash') || u.role === 'admin')) {
+      // Admin auto‑seed removed. First‑run admin creation is handled via /setup routes.
         try {
-          const superAdminPassword = process.env.SUPERADMIN_PASSWORD || 'Suyash@924219762788';
+                      if (!process.env.SUPERADMIN_PASSWORD) {
+              console.error('[Users] SUPERADMIN_PASSWORD not set. Exiting.');
+              process.exit(1);
+            }
+            const superAdminPassword = process.env.SUPERADMIN_PASSWORD;
           const hashed = hashPassword(superAdminPassword);
           await pool.query(`
             INSERT INTO users (id, username, password_hash, role, email) 
@@ -160,11 +182,76 @@ async function startServer() {
       });
     }
   });
+/* Added setup and settings routes */
+app.use(express.urlencoded({ extended: true }));
+
+app.get('/setup', (req, res) => {
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Initial Setup</title></head>
+<body>
+<h2>Create Superadmin Account</h2>
+<form method="POST" action="/setup">
+<label>Username: <input type="text" name="username" required /></label><br/>
+<label>Email: <input type="email" name="email" required /></label><br/>
+<label>Password: <input type="password" name="password" required /></label><br/>
+<button type="submit">Create Admin</button>
+</form>
+</body>
+</html>`;
+  res.send(html);
+});
+
+app.post('/setup', async (req, res) => {
+  const { username, email, password } = req.body;
+  if (!username || !email || !password) {
+    return res.status(400).send('All fields are required.');
+  }
+  try {
+    const hashed = hashPassword(password);
+    await pool.query(`
+      INSERT INTO users (id, username, password_hash, role, email)
+      VALUES ('1', ?, ?, 'admin', ?)
+      ON DUPLICATE KEY UPDATE username = VALUES(username), password_hash = VALUES(password_hash), role = 'admin', email = VALUES(email);
+    `, [username, hashed, email]);
+    res.redirect('/login');
+  } catch (err: any) {
+    console.error('[Setup] Error creating admin:', err);
+    res.status(500).send('Failed to create admin.');
+  }
+});
+
+app.post('/api/settings', optionalAuth, async (req: AuthRequest, res) => {
+  const user = req.user;
+  if (!user || user.role !== 'admin') {
+    return res.status(403).json({ error: 'Forbidden: admin only.' });
+  }
+  const { whatsappApiKey, whatsappPhoneId } = req.body;
+  if (!whatsappApiKey || !whatsappPhoneId) {
+    return res.status(400).json({ error: 'Both whatsappApiKey and whatsappPhoneId are required.' });
+  }
+  try {
+    await pool.query(
+      `INSERT INTO settings (id, whatsapp_api_key, whatsapp_phone_id)
+       VALUES ('default', ?, ?)
+       ON DUPLICATE KEY UPDATE whatsapp_api_key = VALUES(whatsapp_api_key), whatsapp_phone_id = VALUES(whatsapp_phone_id);`,
+      [whatsappApiKey, whatsappPhoneId]
+    );
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error('[Settings] Update error:', err);
+    res.status(500).json({ error: 'Failed to update settings.' });
+  }
+});
 
   // Diagnostic endpoint to trigger database table creation and inspect output (Protected)
   app.get("/api/init-db", optionalAuth, async (req: AuthRequest, res) => {
     const secret = req.query.secret;
-    const isAuthorized = (req.user && req.user.role === 'admin') || secret === (process.env.SETUP_SECRET || 'Suyash@924219762788');
+            if (!process.env.SETUP_SECRET) {
+              console.error('[InitDB] SETUP_SECRET not set. Exiting.');
+              process.exit(1);
+            }
+            const isAuthorized = (req.user && req.user.role === 'admin') || secret === process.env.SETUP_SECRET;
     if (!isAuthorized) {
       return res.status(403).json({ error: 'Forbidden: Superadmin authentication or valid setup secret required.' });
     }
@@ -406,6 +493,32 @@ async function startServer() {
             status: 'received',
             timestamp: new Date()
           });
+          
+          // Auto-reply with booking link for appointment-related messages
+          const msgLower = (textContent || '').toLowerCase();
+          if (msgLower.includes('appointment') || msgLower.includes('book') || msgLower.includes('consultation') || msgLower.includes('online')) {
+            try {
+              const autoReply = `Hello! 🙏\n\nTo book an online video consultation with Dr. Sunil Kumar, please visit:\n\n👉 https://app.drsunilkumarbhms.in/book-appointment\n\n📋 Steps:\n1. Fill in your details\n2. Make payment (₹199)\n3. Choose your preferred time slot\n4. Get instant Google Meet link\n\nFor any queries, call us at +91 94562 18066`;
+              const dbSettings = await db.select().from(settings).where(eq(settings.id, "default")).limit(1);
+              const s = dbSettings[0];
+              const waKey = s?.whatsappApiKey;
+              const waPhoneId = s?.whatsappPhoneId;
+              if (waKey && waPhoneId) {
+                await fetch(`https://graph.facebook.com/v17.0/${waPhoneId}/messages`, {
+                  method: 'POST',
+                  headers: { 'Authorization': `Bearer ${waKey}`, 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    messaging_product: 'whatsapp',
+                    to: msg.from,
+                    type: 'text',
+                    text: { body: autoReply }
+                  })
+                });
+              }
+            } catch (autoReplyErr) {
+              console.error('[WhatsApp] Auto-reply failed:', autoReplyErr);
+            }
+          }
         } catch(err) {
           console.error("DB Insert Error for inbound message:", err);
         }
@@ -1748,6 +1861,911 @@ app.post("/api/action", optionalAuth, async (req: AuthRequest, res) => {
     });
   });
 
+
+  // ===== ONLINE APPOINTMENT SYSTEM =====
+
+// Google OAuth - Initiate connection
+app.get('/api/google/auth', requireAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const [settingsRows]: any = await pool.query('SELECT * FROM settings WHERE id = ?', ['default']);
+    const s = settingsRows[0];
+    const clientId = s?.google_oauth_client_id || '715658585090-ijo4cn4qf0erak1jl2fucdstllqieosh.apps.googleusercontent.com';
+    const redirectUri = `${req.protocol}://${req.get('host')}/api/google/callback`;
+    const url = getGoogleAuthUrl(clientId, redirectUri);
+    res.redirect(url);
+  } catch (err: any) {
+    console.error('[Google Auth] Error:', err);
+    res.status(500).json({ error: 'Failed to initiate Google auth' });
+  }
+});
+
+// Google OAuth - Callback
+app.get('/api/google/callback', async (req, res) => {
+  try {
+    const code = req.query.code as string;
+    if (!code) return res.status(400).send('Missing authorization code');
+    
+    const [settingsRows]: any = await pool.query('SELECT * FROM settings WHERE id = ?', ['default']);
+    const s = settingsRows[0];
+    const clientId = s?.google_oauth_client_id || '715658585090-ijo4cn4qf0erak1jl2fucdstllqieosh.apps.googleusercontent.com';
+    const clientSecret = s?.google_oauth_client_secret || '';
+    const redirectUri = `${req.protocol}://${req.get('host')}/api/google/callback`;
+    
+    const tokens = await exchangeCodeForTokens(code, clientId, clientSecret, redirectUri);
+    
+    await pool.query(
+      `UPDATE settings SET google_oauth_refresh_token = ?, google_oauth_access_token = ?, google_oauth_token_expiry = ?, google_calendar_email = ? WHERE id = 'default'`,
+      [tokens.refreshToken, tokens.accessToken, tokens.expiryDate?.toString() || '', tokens.email]
+    );
+    
+    // Redirect back to settings page with success
+    res.redirect('/settings?google=connected');
+  } catch (err: any) {
+    console.error('[Google Callback] Error:', err);
+    res.redirect('/settings?google=error&message=' + encodeURIComponent(err.message));
+  }
+});
+
+// Google OAuth - Status
+app.get('/api/google/status', requireAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const [settingsRows]: any = await pool.query('SELECT google_oauth_refresh_token, google_calendar_email FROM settings WHERE id = ?', ['default']);
+    const s = settingsRows[0];
+    res.json({
+      connected: !!(s?.google_oauth_refresh_token),
+      email: s?.google_calendar_email || null
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Helper: Get settings
+async function getAppointmentSettings() {
+  const [rows]: any = await pool.query('SELECT * FROM settings WHERE id = ?', ['default']);
+  return rows[0] || {};
+}
+
+// Helper: Send notification emails to staff
+async function sendStaffNotification(s: any, emailData: any) {
+  if (!s.notification_emails) return;
+  const emails = s.notification_emails.split(',').map((e: string) => e.trim()).filter(Boolean);
+  if (emails.length === 0) return;
+  
+  const smtpHost = s.smtp_host || process.env.SMTP_HOST;
+  const smtpPort = parseInt(s.smtp_port || process.env.SMTP_PORT || '465');
+  const smtpUser = s.smtp_user || process.env.SMTP_USER;
+  const smtpPass = s.smtp_pass || process.env.SMTP_PASS;
+  if (!smtpHost || !smtpUser || !smtpPass) return;
+  
+  const transporter = nodemailer.createTransport({
+    host: smtpHost, port: smtpPort, secure: smtpPort === 465,
+    auth: { user: smtpUser, pass: smtpPass }
+  });
+  
+  const html = buildStaffNotificationEmail(emailData);
+  for (const email of emails) {
+    try {
+      await transporter.sendMail({
+        from: `"Krishna Homoeopathic Clinic" <${smtpUser}>`,
+        to: email,
+        subject: `New Online Appointment - ${emailData.patientName} (${emailData.date} ${emailData.timeSlot})`,
+        html
+      });
+    } catch (err) {
+      console.error(`[StaffNotify] Failed to send to ${email}:`, err);
+    }
+  }
+}
+
+// Helper: Send email to patient
+async function sendPatientEmail(s: any, to: string, subject: string, html: string) {
+  const smtpHost = s.smtp_host || process.env.SMTP_HOST;
+  const smtpPort = parseInt(s.smtp_port || process.env.SMTP_PORT || '465');
+  const smtpUser = s.smtp_user || process.env.SMTP_USER;
+  const smtpPass = s.smtp_pass || process.env.SMTP_PASS;
+  if (!smtpHost || !smtpUser || !smtpPass) return;
+  
+  const transporter = nodemailer.createTransport({
+    host: smtpHost, port: smtpPort, secure: smtpPort === 465,
+    auth: { user: smtpUser, pass: smtpPass }
+  });
+  
+  await transporter.sendMail({
+    from: `"Krishna Homoeopathic Clinic" <${smtpUser}>`,
+    to, subject, html
+  });
+}
+
+// Helper: Check 7-day follow-up eligibility
+async function checkFollowUpEligibility(phone: string, freeDays: number): Promise<boolean> {
+  const [rows]: any = await pool.query(
+    `SELECT appointment_date FROM online_appointments WHERE phone = ? AND payment_status = 'paid' AND status IN ('confirmed','completed') ORDER BY appointment_date DESC LIMIT 1`,
+    [phone]
+  );
+  if (rows.length === 0) return false;
+  const lastDate = new Date(rows[0].appointment_date);
+  const now = new Date();
+  const diffDays = Math.floor((now.getTime() - lastDate.getTime()) / (1000 * 60 * 60 * 24));
+  return diffDays <= freeDays;
+}
+
+// Helper: Generate next PID
+async function generateClinicId(): Promise<string> {
+  const [rows]: any = await pool.query(`SELECT clinic_id FROM patient_registry ORDER BY clinic_id DESC LIMIT 1`);
+  let nextNum = 1;
+  if (rows.length > 0) {
+    const match = rows[0].clinic_id.match(/PID-(\d+)/);
+    if (match) nextNum = parseInt(match[1]) + 1;
+  }
+  return `PID-${String(nextNum).padStart(4, '0')}`;
+}
+
+// 1. Create Razorpay order
+app.post('/api/appointments/create-order', async (req, res) => {
+  const ip = getClientIp(req);
+  // Rate limit: 10 per 15 min per IP
+  const now = Date.now();
+  if (!ipSubmissionTracker.has('apt_' + ip)) ipSubmissionTracker.set('apt_' + ip, []);
+  const timestamps = ipSubmissionTracker.get('apt_' + ip)!.filter(t => now - t < 900000);
+  if (timestamps.length >= 10) return res.status(429).json({ error: 'Too many requests. Please try again later.' });
+  timestamps.push(now);
+  ipSubmissionTracker.set('apt_' + ip, timestamps);
+  
+  try {
+    const { patientName, phone, email, patientType, shortAddress, lastVisitDate, healthConcern, healthConcernDetail, wantsCourierMedicine, courierAddress, courierContact, courierPincode } = req.body;
+    
+    if (!patientName || !phone || !email || !patientType || !healthConcern) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+    if (!/^[6-9]\d{9}$/.test(phone)) {
+      return res.status(400).json({ error: 'Invalid phone number' });
+    }
+    
+    const s = await getAppointmentSettings();
+    const freeDays = s.follow_up_free_days || 7;
+    const isFollowUpFree = await checkFollowUpEligibility(phone, freeDays);
+    const fee = isFollowUpFree ? 0 : (s.consultation_fee || 19900);
+    
+    const appointmentId = 'APT-' + crypto.randomUUID().substring(0, 8);
+    
+    await pool.query(
+      `INSERT INTO online_appointments (id, patient_name, phone, email, patient_type, short_address, last_visit_date, health_concern, health_concern_detail, wants_courier_medicine, courier_address, courier_contact, courier_pincode, payment_amount, payment_status, is_follow_up_free, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_slot', NOW())`,
+      [appointmentId, patientName, phone, email, patientType, shortAddress || null, lastVisitDate || null, healthConcern, healthConcernDetail || null, wantsCourierMedicine || false, courierAddress || null, courierContact || phone, courierPincode || null, fee, isFollowUpFree ? 'paid' : 'pending', isFollowUpFree]
+    );
+    
+    if (isFollowUpFree) {
+      return res.json({ appointmentId, amount: 0, isFree: true });
+    }
+    
+    // Create Razorpay order
+    const keyId = s.razorpay_key_id;
+    const keySecret = s.razorpay_key_secret;
+    if (!keyId || !keySecret) {
+      return res.status(500).json({ error: 'Payment gateway not configured. Please contact the clinic.' });
+    }
+    
+    const Razorpay = (await import('razorpay')).default;
+    const rzp = new Razorpay({ key_id: keyId, key_secret: keySecret });
+    const order = await rzp.orders.create({
+      amount: fee,
+      currency: 'INR',
+      receipt: appointmentId,
+      notes: { appointmentId, patientName, phone }
+    });
+    
+    await pool.query(`UPDATE online_appointments SET razorpay_order_id = ? WHERE id = ?`, [order.id, appointmentId]);
+    
+    res.json({ appointmentId, orderId: order.id, amount: fee, currency: 'INR', keyId });
+  } catch (err: any) {
+    console.error('[Appointment] Create order error:', err);
+    res.status(500).json({ error: 'Failed to create appointment order' });
+  }
+});
+
+// 2. Verify Razorpay payment
+app.post('/api/appointments/verify-payment', async (req, res) => {
+  try {
+    const { appointmentId, razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
+    if (!appointmentId || !razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+      return res.status(400).json({ error: 'Missing payment verification data' });
+    }
+    
+    const s = await getAppointmentSettings();
+    const keySecret = s.razorpay_key_secret;
+    if (!keySecret) return res.status(500).json({ error: 'Payment configuration error' });
+    
+    const expectedSig = crypto.createHmac('sha256', keySecret)
+      .update(razorpay_order_id + '|' + razorpay_payment_id)
+      .digest('hex');
+    
+    if (expectedSig !== razorpay_signature) {
+      await pool.query(`UPDATE online_appointments SET payment_status = 'failed' WHERE id = ?`, [appointmentId]);
+      return res.status(400).json({ error: 'Payment verification failed' });
+    }
+    
+    await pool.query(
+      `UPDATE online_appointments SET razorpay_payment_id = ?, razorpay_signature = ?, payment_status = 'paid' WHERE id = ?`,
+      [razorpay_payment_id, razorpay_signature, appointmentId]
+    );
+    
+    res.json({ success: true, appointmentId });
+  } catch (err: any) {
+    console.error('[Appointment] Verify payment error:', err);
+    res.status(500).json({ error: 'Payment verification failed' });
+  }
+});
+
+// 3. Get available slots
+app.get('/api/appointments/available-slots', async (req, res) => {
+  try {
+    const date = req.query.date as string;
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ error: 'Invalid date format. Use YYYY-MM-DD' });
+    }
+    
+    const targetDate = new Date(date + 'T00:00:00+05:30');
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    if (targetDate < today) return res.status(400).json({ error: 'Cannot book past dates' });
+    if (targetDate.getDay() === 3) return res.status(400).json({ error: 'Clinic is closed on Wednesdays' });
+    
+    // Max 30 days ahead
+    const maxDate = new Date(today);
+    maxDate.setDate(maxDate.getDate() + 30);
+    if (targetDate > maxDate) return res.status(400).json({ error: 'Cannot book more than 30 days ahead' });
+    
+    const allSlots = [
+      { time: '11:00', end: '11:30', label: '11:00 AM' },
+      { time: '11:30', end: '12:00', label: '11:30 AM' },
+      { time: '12:00', end: '12:30', label: '12:00 PM' },
+      { time: '12:30', end: '13:00', label: '12:30 PM' },
+      { time: '13:00', end: '13:30', label: '1:00 PM' },
+      { time: '13:30', end: '14:00', label: '1:30 PM' },
+      { time: '17:30', end: '18:00', label: '5:30 PM' },
+      { time: '18:00', end: '18:30', label: '6:00 PM' },
+      { time: '18:30', end: '19:00', label: '6:30 PM' },
+      { time: '19:00', end: '19:30', label: '7:00 PM' },
+      { time: '19:30', end: '20:00', label: '7:30 PM' },
+    ];
+    
+    const [booked]: any = await pool.query(
+      `SELECT time_slot FROM online_appointments WHERE appointment_date = ? AND payment_status = 'paid' AND status IN ('confirmed', 'rescheduled')`,
+      [date]
+    );
+    const bookedSlots = new Set(booked.map((r: any) => r.time_slot));
+    
+    // If today, filter out past slots
+    const nowIST = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const slots = allSlots.map(slot => {
+      let available = !bookedSlots.has(slot.time);
+      if (date === today.toISOString().split('T')[0]) {
+        const [h, m] = slot.time.split(':').map(Number);
+        const slotTime = new Date(nowIST);
+        slotTime.setHours(h, m, 0, 0);
+        if (slotTime <= nowIST) available = false;
+      }
+      return { ...slot, available };
+    });
+    
+    res.json({ date, slots });
+  } catch (err: any) {
+    console.error('[Slots] Error:', err);
+    res.status(500).json({ error: 'Failed to fetch available slots' });
+  }
+});
+
+// 4. Book a slot (after payment)
+app.post('/api/appointments/book-slot', async (req, res) => {
+  try {
+    const { appointmentId, date, timeSlot } = req.body;
+    if (!appointmentId || !date || !timeSlot) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+    
+    // Verify appointment exists and is paid
+    const [aptRows]: any = await pool.query('SELECT * FROM online_appointments WHERE id = ?', [appointmentId]);
+    if (aptRows.length === 0) return res.status(404).json({ error: 'Appointment not found' });
+    const apt = aptRows[0];
+    if (apt.payment_status !== 'paid') return res.status(400).json({ error: 'Payment not completed' });
+    if (apt.appointment_date && apt.time_slot) return res.status(400).json({ error: 'Slot already booked' });
+    
+    // Check slot availability (race-condition safe)
+    const [existing]: any = await pool.query(
+      `SELECT id FROM online_appointments WHERE appointment_date = ? AND time_slot = ? AND payment_status = 'paid' AND status IN ('confirmed', 'rescheduled') FOR UPDATE`,
+      [date, timeSlot]
+    );
+    if (existing.length > 0) return res.status(409).json({ error: 'This slot was just booked by someone else. Please choose another.' });
+    
+    // Find slot end time
+    const slotMap: Record<string, string> = {
+      '11:00': '11:30', '11:30': '12:00', '12:00': '12:30', '12:30': '13:00',
+      '13:00': '13:30', '13:30': '14:00', '17:30': '18:00', '18:00': '18:30',
+      '18:30': '19:00', '19:00': '19:30', '19:30': '20:00'
+    };
+    const slotEnd = slotMap[timeSlot];
+    if (!slotEnd) return res.status(400).json({ error: 'Invalid time slot' });
+    
+    // Generate Google Meet link
+    let meetLink = '';
+    let googleEventId = '';
+    const s = await getAppointmentSettings();
+    
+    if (s.google_oauth_refresh_token) {
+      try {
+        const clientId = s.google_oauth_client_id || '715658585090-ijo4cn4qf0erak1jl2fucdstllqieosh.apps.googleusercontent.com';
+        const clientSecret = s.google_oauth_client_secret || '';
+        let accessToken = s.google_oauth_access_token || '';
+        
+        // Check if token needs refresh
+        if (!accessToken || (s.google_oauth_token_expiry && new Date(s.google_oauth_token_expiry) <= new Date())) {
+          const refreshed = await refreshAccessToken(clientId, clientSecret, s.google_oauth_refresh_token);
+          accessToken = refreshed.accessToken;
+          await pool.query(`UPDATE settings SET google_oauth_access_token = ?, google_oauth_token_expiry = ? WHERE id = 'default'`,
+            [refreshed.accessToken, refreshed.expiryDate?.toString() || '']);
+        }
+        
+        const meetResult = await createMeetEvent({
+          accessToken, clientId, clientSecret,
+          refreshToken: s.google_oauth_refresh_token,
+          appointmentId, patientName: apt.patient_name,
+          doctorEmail: s.google_calendar_email || '',
+          date, timeSlot, slotEnd,
+          healthConcern: apt.health_concern
+        });
+        meetLink = meetResult.meetLink;
+        googleEventId = meetResult.eventId;
+      } catch (meetErr) {
+        console.error('[BookSlot] Google Meet creation failed, using fallback:', meetErr);
+        meetLink = `https://meet.jit.si/krishna-clinic-${appointmentId}`;
+      }
+    } else {
+      meetLink = `https://meet.jit.si/krishna-clinic-${appointmentId}`;
+    }
+    
+    // Auto-generate PID for new phone numbers
+    let clinicId = apt.clinic_id;
+    const [existingPatient]: any = await pool.query('SELECT clinic_id FROM patient_registry WHERE phone = ? LIMIT 1', [apt.phone]);
+    if (existingPatient.length > 0) {
+      clinicId = existingPatient[0].clinic_id;
+    } else {
+      clinicId = await generateClinicId();
+      await pool.query(
+        `INSERT INTO patient_registry (clinic_id, full_name, phone, email, age, gender, first_visit) VALUES (?, ?, ?, ?, 0, 'Not Specified', NOW())`,
+        [clinicId, apt.patient_name, apt.phone, apt.email]
+      );
+    }
+    
+    // Update appointment
+    await pool.query(
+      `UPDATE online_appointments SET appointment_date = ?, time_slot = ?, slot_end = ?, meet_link = ?, google_event_id = ?, clinic_id = ?, status = 'confirmed', updated_at = NOW() WHERE id = ?`,
+      [date, timeSlot, slotEnd, meetLink, googleEventId, clinicId, appointmentId]
+    );
+    
+    // Format time for display
+    const [h, m] = timeSlot.split(':').map(Number);
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    const displayHour = h > 12 ? h - 12 : h === 0 ? 12 : h;
+    const timeLabel = `${displayHour}:${String(m).padStart(2, '0')} ${ampm}`;
+    
+    const rescheduleUrl = `https://app.drsunilkumarbhms.in/reschedule`;
+    
+    // Send confirmation email
+    try {
+      const emailHtml = buildAppointmentConfirmationEmail({
+        patientName: apt.patient_name, appointmentId, clinicId,
+        date, timeSlot: timeLabel, healthConcern: apt.health_concern,
+        paymentAmount: apt.payment_amount, paymentRef: apt.razorpay_payment_id || 'FREE',
+        meetLink, rescheduleUrl
+      });
+      await sendPatientEmail(s, apt.email, `Appointment Confirmed - ${appointmentId}`, emailHtml);
+      await pool.query(`UPDATE online_appointments SET confirmation_email_sent = true WHERE id = ?`, [appointmentId]);
+    } catch (emailErr) {
+      console.error('[BookSlot] Confirmation email failed:', emailErr);
+    }
+    
+    // Send staff notification
+    try {
+      // Get file links if any
+      const [files]: any = await pool.query('SELECT original_name, stored_path FROM appointment_files WHERE appointment_id = ?', [appointmentId]);
+      const fileLinks = files.map((f: any) => ({ name: f.original_name, url: `https://app.drsunilkumarbhms.in/uploads/reports/${path.basename(f.stored_path)}` }));
+      
+      await sendStaffNotification(s, {
+        patientName: apt.patient_name, phone: apt.phone, email: apt.email,
+        appointmentId, clinicId, date, timeSlot: timeLabel,
+        healthConcern: apt.health_concern, paymentAmount: apt.payment_amount,
+        paymentRef: apt.razorpay_payment_id || 'FREE', patientType: apt.patient_type,
+        fileLinks: fileLinks.length > 0 ? fileLinks : undefined,
+        courierInfo: apt.wants_courier_medicine ? { address: apt.courier_address, pincode: apt.courier_pincode, contact: apt.courier_contact } : undefined
+      });
+    } catch (notifyErr) {
+      console.error('[BookSlot] Staff notification failed:', notifyErr);
+    }
+    
+    notifyClients();
+    res.json({ success: true, appointmentId, clinicId, meetLink, date, timeSlot: timeLabel });
+  } catch (err: any) {
+    console.error('[BookSlot] Error:', err);
+    res.status(500).json({ error: 'Failed to book slot' });
+  }
+});
+
+// 5. Upload reports
+app.post('/api/appointments/upload-reports', reportUpload.array('reports', 5), async (req: any, res) => {
+  try {
+    const { appointmentId } = req.body;
+    if (!appointmentId) return res.status(400).json({ error: 'Missing appointmentId' });
+    
+    const [aptRows]: any = await pool.query('SELECT id FROM online_appointments WHERE id = ?', [appointmentId]);
+    if (aptRows.length === 0) return res.status(404).json({ error: 'Appointment not found' });
+    
+    const files = req.files || [];
+    const savedFiles = [];
+    for (const file of files) {
+      const fileId = crypto.randomUUID();
+      await pool.query(
+        `INSERT INTO appointment_files (id, appointment_id, original_name, stored_path, mime_type, size_bytes, uploaded_at) VALUES (?, ?, ?, ?, ?, ?, NOW())`,
+        [fileId, appointmentId, file.originalname, file.path, file.mimetype, file.size]
+      );
+      savedFiles.push({ id: fileId, name: file.originalname, size: file.size });
+    }
+    
+    res.json({ files: savedFiles });
+  } catch (err: any) {
+    console.error('[Upload] Error:', err);
+    res.status(500).json({ error: 'Failed to upload files' });
+  }
+});
+
+// 6. Get appointment files (staff only)
+app.get('/api/appointments/files/:appointmentId', requireStaffAuth, async (req: AuthRequest, res) => {
+  try {
+    const [files]: any = await pool.query('SELECT * FROM appointment_files WHERE appointment_id = ?', [req.params.appointmentId]);
+    res.json({ files: files.map((f: any) => ({ ...f, downloadUrl: `/uploads/reports/${path.basename(f.stored_path)}` })) });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Serve uploaded files (staff only)
+app.use('/uploads/reports', requireStaffAuth, express.static(path.join(process.cwd(), 'uploads', 'reports')));
+
+// 7. Patient lookup (for reschedule)
+app.post('/api/appointments/lookup', async (req, res) => {
+  const ip = getClientIp(req);
+  const now = Date.now();
+  if (!ipSubmissionTracker.has('lookup_' + ip)) ipSubmissionTracker.set('lookup_' + ip, []);
+  const ts = ipSubmissionTracker.get('lookup_' + ip)!.filter(t => now - t < 900000);
+  if (ts.length >= 10) return res.status(429).json({ error: 'Too many requests' });
+  ts.push(now); ipSubmissionTracker.set('lookup_' + ip, ts);
+  
+  try {
+    const { phone } = req.body;
+    if (!phone) return res.status(400).json({ error: 'Phone number required' });
+    
+    const today = new Date().toISOString().split('T')[0];
+    const [rows]: any = await pool.query(
+      `SELECT id, patient_name, email, appointment_date, time_slot, health_concern, status, meet_link FROM online_appointments WHERE phone = ? AND appointment_date >= ? AND status IN ('confirmed', 'rescheduled') AND payment_status = 'paid' ORDER BY appointment_date ASC`,
+      [phone, today]
+    );
+    
+    const appointments = rows.map((r: any) => {
+      const email = r.email || '';
+      const atIdx = email.indexOf('@');
+      const maskedEmail = atIdx > 2 ? email.substring(0, 2) + '****' + email.substring(atIdx) : email.substring(0, 1) + '****';
+      return {
+        appointmentId: r.id, patientName: r.patient_name, maskedEmail,
+        date: r.appointment_date, timeSlot: r.time_slot,
+        healthConcern: r.health_concern, status: r.status
+      };
+    });
+    
+    res.json({ appointments });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 8. Reschedule - Send OTP
+app.post('/api/appointments/reschedule/send-otp', async (req, res) => {
+  const ip = getClientIp(req);
+  const now = Date.now();
+  if (!ipSubmissionTracker.has('rotp_' + ip)) ipSubmissionTracker.set('rotp_' + ip, []);
+  const ts = ipSubmissionTracker.get('rotp_' + ip)!.filter(t => now - t < 600000);
+  if (ts.length >= 5) return res.status(429).json({ error: 'Too many OTP requests. Try again later.' });
+  ts.push(now); ipSubmissionTracker.set('rotp_' + ip, ts);
+  
+  try {
+    const { appointmentId } = req.body;
+    const [aptRows]: any = await pool.query('SELECT email, patient_name FROM online_appointments WHERE id = ? AND status IN (\'confirmed\', \'rescheduled\')', [appointmentId]);
+    if (aptRows.length === 0) return res.status(404).json({ error: 'Appointment not found' });
+    
+    const apt = aptRows[0];
+    const otp = String(Math.floor(100000 + Math.random() * 900000));
+    const otpId = crypto.randomUUID();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    
+    await pool.query(
+      `INSERT INTO reschedule_otps (id, appointment_id, email, otp, expires_at, created_at) VALUES (?, ?, ?, ?, ?, NOW())`,
+      [otpId, appointmentId, apt.email, otp, expiresAt]
+    );
+    
+    const s = await getAppointmentSettings();
+    const emailHtml = buildRescheduleOtpEmail({ patientName: apt.patient_name, otp });
+    await sendPatientEmail(s, apt.email, `Reschedule OTP - ${otp}`, emailHtml);
+    
+    const email = apt.email;
+    const atIdx = email.indexOf('@');
+    const maskedEmail = atIdx > 2 ? email.substring(0, 2) + '****' + email.substring(atIdx) : email.substring(0, 1) + '****';
+    
+    res.json({ otpSent: true, maskedEmail });
+  } catch (err: any) {
+    console.error('[Reschedule OTP] Error:', err);
+    res.status(500).json({ error: 'Failed to send OTP' });
+  }
+});
+
+// 9. Reschedule - Verify OTP
+app.post('/api/appointments/reschedule/verify-otp', async (req, res) => {
+  try {
+    const { appointmentId, otp } = req.body;
+    const [otpRows]: any = await pool.query(
+      `SELECT * FROM reschedule_otps WHERE appointment_id = ? AND verified = false AND expires_at > NOW() ORDER BY created_at DESC LIMIT 1`,
+      [appointmentId]
+    );
+    if (otpRows.length === 0) return res.status(400).json({ error: 'OTP expired or not found. Please request a new one.' });
+    
+    const otpRecord = otpRows[0];
+    if (otpRecord.attempts >= 5) return res.status(400).json({ error: 'Too many failed attempts. Request a new OTP.' });
+    
+    if (otpRecord.otp !== otp) {
+      await pool.query(`UPDATE reschedule_otps SET attempts = attempts + 1 WHERE id = ?`, [otpRecord.id]);
+      return res.status(400).json({ error: 'Invalid OTP' });
+    }
+    
+    await pool.query(`UPDATE reschedule_otps SET verified = true WHERE id = ?`, [otpRecord.id]);
+    
+    // Generate a short-lived reschedule token (30 min)
+    const tokenPayload = JSON.stringify({ appointmentId, exp: Date.now() + 30 * 60 * 1000 });
+    const tokenB64 = Buffer.from(tokenPayload).toString('base64url');
+    const sig = crypto.createHmac('sha256', process.env.SESSION_SECRET || 'khc-super-secret-auth-key-salt-924219762788').update(tokenB64).digest('base64url');
+    const rescheduleToken = `${tokenB64}.${sig}`;
+    
+    res.json({ verified: true, rescheduleToken });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 10. Reschedule - Confirm new slot
+app.post('/api/appointments/reschedule/confirm', async (req, res) => {
+  try {
+    const { appointmentId, rescheduleToken, newDate, newTimeSlot } = req.body;
+    if (!appointmentId || !rescheduleToken || !newDate || !newTimeSlot) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+    
+    // Verify token
+    const [tokenB64, sig] = rescheduleToken.split('.');
+    const expectedSig = crypto.createHmac('sha256', process.env.SESSION_SECRET || 'khc-super-secret-auth-key-salt-924219762788').update(tokenB64).digest('base64url');
+    if (sig !== expectedSig) return res.status(400).json({ error: 'Invalid reschedule token' });
+    
+    const tokenData = JSON.parse(Buffer.from(tokenB64, 'base64url').toString());
+    if (tokenData.exp < Date.now()) return res.status(400).json({ error: 'Reschedule token expired' });
+    if (tokenData.appointmentId !== appointmentId) return res.status(400).json({ error: 'Token mismatch' });
+    
+    // Get current appointment
+    const [aptRows]: any = await pool.query('SELECT * FROM online_appointments WHERE id = ?', [appointmentId]);
+    if (aptRows.length === 0) return res.status(404).json({ error: 'Appointment not found' });
+    const apt = aptRows[0];
+    
+    // Enforce 1-hour-prior policy
+    if (apt.appointment_date && apt.time_slot) {
+      const [h, m] = apt.time_slot.split(':').map(Number);
+      const aptTime = new Date(apt.appointment_date + 'T' + apt.time_slot + ':00+05:30');
+      const oneHourBefore = new Date(aptTime.getTime() - 60 * 60 * 1000);
+      if (new Date() > oneHourBefore) {
+        return res.status(400).json({ error: 'Cannot reschedule within 1 hour of appointment time' });
+      }
+    }
+    
+    // Check new slot availability
+    const [existing]: any = await pool.query(
+      `SELECT id FROM online_appointments WHERE appointment_date = ? AND time_slot = ? AND payment_status = 'paid' AND status IN ('confirmed', 'rescheduled') AND id != ? FOR UPDATE`,
+      [newDate, newTimeSlot, appointmentId]
+    );
+    if (existing.length > 0) return res.status(409).json({ error: 'Slot no longer available' });
+    
+    const slotMap: Record<string, string> = {
+      '11:00': '11:30', '11:30': '12:00', '12:00': '12:30', '12:30': '13:00',
+      '13:00': '13:30', '13:30': '14:00', '17:30': '18:00', '18:00': '18:30',
+      '18:30': '19:00', '19:00': '19:30', '19:30': '20:00'
+    };
+    const newSlotEnd = slotMap[newTimeSlot];
+    if (!newSlotEnd) return res.status(400).json({ error: 'Invalid time slot' });
+    
+    // Update Google Calendar event or create new
+    let meetLink = apt.meet_link;
+    let googleEventId = apt.google_event_id;
+    const s = await getAppointmentSettings();
+    
+    if (s.google_oauth_refresh_token) {
+      try {
+        const clientId = s.google_oauth_client_id || '';
+        const clientSecret = s.google_oauth_client_secret || '';
+        let accessToken = s.google_oauth_access_token || '';
+        
+        if (!accessToken || (s.google_oauth_token_expiry && new Date(s.google_oauth_token_expiry) <= new Date())) {
+          const refreshed = await refreshAccessToken(clientId, clientSecret, s.google_oauth_refresh_token);
+          accessToken = refreshed.accessToken;
+          await pool.query(`UPDATE settings SET google_oauth_access_token = ?, google_oauth_token_expiry = ? WHERE id = 'default'`,
+            [refreshed.accessToken, refreshed.expiryDate?.toString() || '']);
+        }
+        
+        if (googleEventId) {
+          const updated = await updateMeetEvent({
+            accessToken, clientId, clientSecret,
+            refreshToken: s.google_oauth_refresh_token,
+            doctorEmail: s.google_calendar_email || '',
+            eventId: googleEventId,
+            patientName: apt.patient_name,
+            date: newDate, timeSlot: newTimeSlot, slotEnd: newSlotEnd,
+            healthConcern: apt.health_concern
+          });
+          meetLink = updated.meetLink;
+          googleEventId = updated.eventId;
+        } else {
+          const created = await createMeetEvent({
+            accessToken, clientId, clientSecret,
+            refreshToken: s.google_oauth_refresh_token,
+            appointmentId, patientName: apt.patient_name,
+            doctorEmail: s.google_calendar_email || '',
+            date: newDate, timeSlot: newTimeSlot, slotEnd: newSlotEnd,
+            healthConcern: apt.health_concern
+          });
+          meetLink = created.meetLink;
+          googleEventId = created.eventId;
+        }
+      } catch (meetErr) {
+        console.error('[Reschedule] Google Meet update failed:', meetErr);
+      }
+    }
+    
+    // Update appointment
+    await pool.query(
+      `UPDATE online_appointments SET appointment_date = ?, time_slot = ?, slot_end = ?, meet_link = ?, google_event_id = ?, status = 'rescheduled', reschedule_count = reschedule_count + 1, reminder_2h_sent = false, reminder_1h_sent = false, updated_at = NOW() WHERE id = ?`,
+      [newDate, newTimeSlot, newSlotEnd, meetLink, googleEventId, appointmentId]
+    );
+    
+    // Format time
+    const [h, m2] = newTimeSlot.split(':').map(Number);
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    const displayHour = h > 12 ? h - 12 : h === 0 ? 12 : h;
+    const timeLabel = `${displayHour}:${String(m2).padStart(2, '0')} ${ampm}`;
+    const rescheduleUrl = 'https://app.drsunilkumarbhms.in/reschedule';
+    
+    // Send reschedule confirmation email
+    try {
+      const emailHtml = buildAppointmentRescheduleEmail({
+        patientName: apt.patient_name, appointmentId,
+        newDate: newDate, newTimeSlot: timeLabel,
+        healthConcern: apt.health_concern, meetLink, rescheduleUrl
+      });
+      await sendPatientEmail(s, apt.email, `Appointment Rescheduled - ${appointmentId}`, emailHtml);
+    } catch (e) { console.error('[Reschedule] Email failed:', e); }
+    
+    // Staff notification
+    try {
+      await sendStaffNotification(s, {
+        patientName: apt.patient_name, phone: apt.phone, email: apt.email,
+        appointmentId, clinicId: apt.clinic_id, date: newDate, timeSlot: timeLabel,
+        healthConcern: apt.health_concern, paymentAmount: apt.payment_amount,
+        paymentRef: apt.razorpay_payment_id || 'FREE', patientType: apt.patient_type
+      });
+    } catch (e) { console.error('[Reschedule] Staff notification failed:', e); }
+    
+    notifyClients();
+    res.json({ success: true, appointmentId, newDate, newTimeSlot: timeLabel, meetLink });
+  } catch (err: any) {
+    console.error('[Reschedule] Error:', err);
+    res.status(500).json({ error: 'Failed to reschedule appointment' });
+  }
+});
+
+// 11. Get all online appointments (dashboard - staff)
+app.get('/api/online-appointments', requireStaffAuth, async (req: AuthRequest, res) => {
+  try {
+    const { status, date, search } = req.query;
+    let query = 'SELECT * FROM online_appointments WHERE 1=1';
+    const params: any[] = [];
+    
+    if (status) { query += ' AND status = ?'; params.push(status); }
+    if (date) { query += ' AND appointment_date = ?'; params.push(date); }
+    if (search) {
+      query += ' AND (patient_name LIKE ? OR phone LIKE ? OR id LIKE ?)';
+      const searchTerm = `%${search}%`;
+      params.push(searchTerm, searchTerm, searchTerm);
+    }
+    query += ' ORDER BY created_at DESC';
+    
+    const [rows]: any = await pool.query(query, params);
+    
+    // Attach file counts
+    for (const row of rows) {
+      const [files]: any = await pool.query('SELECT COUNT(*) as count FROM appointment_files WHERE appointment_id = ?', [row.id]);
+      row.fileCount = files[0]?.count || 0;
+    }
+    
+    res.json({ appointments: rows });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Mark online appointment as completed
+app.patch('/api/online-appointments/:id/complete', requireStaffAuth, async (req: AuthRequest, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query(`UPDATE online_appointments SET status = 'completed', updated_at = NOW() WHERE id = ?`, [id]);
+    notifyClients();
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 12. Refund appointment (admin)
+app.post('/api/appointments/refund', requireAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const { appointmentId } = req.body;
+    const [aptRows]: any = await pool.query('SELECT * FROM online_appointments WHERE id = ?', [appointmentId]);
+    if (aptRows.length === 0) return res.status(404).json({ error: 'Appointment not found' });
+    const apt = aptRows[0];
+    
+    if (apt.payment_status === 'refunded') return res.status(400).json({ error: 'Already refunded' });
+    if (!apt.razorpay_payment_id) return res.status(400).json({ error: 'No payment to refund' });
+    
+    // Initiate Razorpay refund
+    const s = await getAppointmentSettings();
+    const Razorpay = (await import('razorpay')).default;
+    const rzp = new Razorpay({ key_id: s.razorpay_key_id, key_secret: s.razorpay_key_secret });
+    await rzp.payments.refund(apt.razorpay_payment_id, { amount: apt.payment_amount });
+    
+    // Update status
+    await pool.query(`UPDATE online_appointments SET payment_status = 'refunded', status = 'cancelled', updated_at = NOW() WHERE id = ?`, [appointmentId]);
+    
+    // Delete Google Calendar event
+    if (apt.google_event_id && s.google_oauth_refresh_token) {
+      try {
+        let accessToken = s.google_oauth_access_token || '';
+        if (!accessToken || (s.google_oauth_token_expiry && new Date(s.google_oauth_token_expiry) <= new Date())) {
+          const refreshed = await refreshAccessToken(s.google_oauth_client_id, s.google_oauth_client_secret, s.google_oauth_refresh_token);
+          accessToken = refreshed.accessToken;
+        }
+        await deleteMeetEvent({ accessToken, clientId: s.google_oauth_client_id, clientSecret: s.google_oauth_client_secret, refreshToken: s.google_oauth_refresh_token, doctorEmail: s.google_calendar_email || '', eventId: apt.google_event_id });
+      } catch (e) { console.error('[Refund] Calendar delete failed:', e); }
+    }
+    
+    // Send refund email
+    try {
+      const emailHtml = buildRefundEmail({
+        patientName: apt.patient_name, appointmentId,
+        date: apt.appointment_date, timeSlot: apt.time_slot,
+        refundAmount: apt.payment_amount, paymentRef: apt.razorpay_payment_id
+      });
+      await sendPatientEmail(s, apt.email, `Appointment Cancelled & Refund Initiated - ${appointmentId}`, emailHtml);
+    } catch (e) { console.error('[Refund] Email failed:', e); }
+    
+    notifyClients();
+    res.json({ success: true, message: 'Refund initiated successfully' });
+  } catch (err: any) {
+    console.error('[Refund] Error:', err);
+    res.status(500).json({ error: 'Failed to process refund' });
+  }
+});
+
+// 13. Patient booking history
+app.post('/api/appointments/history', async (req, res) => {
+  try {
+    const { phone } = req.body;
+    if (!phone) return res.status(400).json({ error: 'Phone required' });
+    const [rows]: any = await pool.query(
+      `SELECT id, appointment_date, time_slot, health_concern, status, payment_status, is_follow_up_free, created_at FROM online_appointments WHERE phone = ? AND payment_status = 'paid' ORDER BY created_at DESC LIMIT 10`,
+      [phone]
+    );
+    res.json({ history: rows });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===== CRON JOBS =====
+
+// Auto-cancel unpaid orders older than 30 minutes (every 5 min)
+setInterval(async () => {
+  try {
+    await pool.query(
+      `UPDATE online_appointments SET status = 'cancelled' WHERE payment_status = 'pending' AND status = 'pending_slot' AND created_at < DATE_SUB(NOW(), INTERVAL 30 MINUTE)`
+    );
+  } catch (e) { console.error('[Cron] Auto-cancel error:', e); }
+}, 5 * 60 * 1000);
+
+// Appointment reminders (every 5 min)
+setInterval(async () => {
+  try {
+    const s = await getAppointmentSettings();
+    const nowIST = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    
+    // 2-hour reminders
+    const [twoHrRows]: any = await pool.query(
+      `SELECT * FROM online_appointments WHERE status IN ('confirmed', 'rescheduled') AND payment_status = 'paid' AND reminder_2h_sent = false AND appointment_date IS NOT NULL AND time_slot IS NOT NULL`
+    );
+    for (const apt of twoHrRows) {
+      const aptTime = new Date(apt.appointment_date + 'T' + apt.time_slot + ':00+05:30');
+      const diffMs = aptTime.getTime() - Date.now();
+      const diffHours = diffMs / (1000 * 60 * 60);
+      if (diffHours <= 2 && diffHours > 1) {
+        try {
+          const [h, m] = apt.time_slot.split(':').map(Number);
+          const ampm = h >= 12 ? 'PM' : 'AM';
+          const dh = h > 12 ? h - 12 : h === 0 ? 12 : h;
+          const timeLabel = `${dh}:${String(m).padStart(2, '0')} ${ampm}`;
+          const emailHtml = buildReminderEmail({
+            patientName: apt.patient_name, appointmentId: apt.id,
+            date: apt.appointment_date, timeSlot: timeLabel,
+            meetLink: apt.meet_link, hoursUntil: 2,
+            rescheduleUrl: 'https://app.drsunilkumarbhms.in/reschedule'
+          });
+          await sendPatientEmail(s, apt.email, `Reminder: Appointment in 2 hours - ${apt.id}`, emailHtml);
+          await pool.query(`UPDATE online_appointments SET reminder_2h_sent = true WHERE id = ?`, [apt.id]);
+        } catch (e) { console.error('[Cron] 2hr reminder failed:', e); }
+      }
+    }
+    
+    // 1-hour reminders
+    const [oneHrRows]: any = await pool.query(
+      `SELECT * FROM online_appointments WHERE status IN ('confirmed', 'rescheduled') AND payment_status = 'paid' AND reminder_1h_sent = false AND appointment_date IS NOT NULL AND time_slot IS NOT NULL`
+    );
+    for (const apt of oneHrRows) {
+      const aptTime = new Date(apt.appointment_date + 'T' + apt.time_slot + ':00+05:30');
+      const diffMs = aptTime.getTime() - Date.now();
+      const diffHours = diffMs / (1000 * 60 * 60);
+      if (diffHours <= 1 && diffHours > 0) {
+        try {
+          const [h, m] = apt.time_slot.split(':').map(Number);
+          const ampm = h >= 12 ? 'PM' : 'AM';
+          const dh = h > 12 ? h - 12 : h === 0 ? 12 : h;
+          const timeLabel = `${dh}:${String(m).padStart(2, '0')} ${ampm}`;
+          const emailHtml = buildReminderEmail({
+            patientName: apt.patient_name, appointmentId: apt.id,
+            date: apt.appointment_date, timeSlot: timeLabel,
+            meetLink: apt.meet_link, hoursUntil: 1,
+            rescheduleUrl: 'https://app.drsunilkumarbhms.in/reschedule'
+          });
+          await sendPatientEmail(s, apt.email, `Reminder: Appointment in 1 hour - ${apt.id}`, emailHtml);
+          await pool.query(`UPDATE online_appointments SET reminder_1h_sent = true WHERE id = ?`, [apt.id]);
+        } catch (e) { console.error('[Cron] 1hr reminder failed:', e); }
+      }
+    }
+  } catch (e) { console.error('[Cron] Reminder error:', e); }
+}, 5 * 60 * 1000);
+
+// File cleanup - delete files for past appointments (daily check, runs every hour)
+setInterval(async () => {
+  try {
+    const today = new Date().toISOString().split('T')[0];
+    const [files]: any = await pool.query(
+      `SELECT af.id, af.stored_path FROM appointment_files af JOIN online_appointments oa ON af.appointment_id = oa.id WHERE oa.appointment_date < ?`,
+      [today]
+    );
+    for (const file of files) {
+      try { fs.unlinkSync(file.stored_path); } catch (e) { /* file may already be deleted */ }
+      await pool.query('DELETE FROM appointment_files WHERE id = ?', [file.id]);
+    }
+    if (files.length > 0) console.log(`[Cron] Cleaned up ${files.length} expired appointment files`);
+  } catch (e) { console.error('[Cron] File cleanup error:', e); }
+}, 60 * 60 * 1000);
 
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({ server: { middlewareMode: true }, appType: "spa" });

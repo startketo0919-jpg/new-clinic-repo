@@ -8,7 +8,8 @@ import UpcomingAppointments from '../components/UpcomingAppointments';
 import UserManagement from '../components/UserManagement';
 import DelhiveryCourier from '../components/DelhiveryCourier';
 import ShipmentManagement from '../components/ShipmentManagement';
-import { LogOut, Activity, Users, Clock, CheckCircle, XCircle, LayoutDashboard, History, Settings, UserCog, Calendar, Package, Truck } from 'lucide-react';
+import OnlineAppointments from '../components/OnlineAppointments';
+import { LogOut, Activity, Users, Clock, CheckCircle, XCircle, LayoutDashboard, History, Settings, UserCog, Calendar, Package, Truck, Video } from 'lucide-react';
 import { getLocalTodayString, isSameDayLocal } from "../lib/dateUtils";
 import WhatsAppWidget from "../components/WhatsAppWidget";
 import { useNavigate } from 'react-router-dom';
@@ -16,7 +17,7 @@ import { useNavigate } from 'react-router-dom';
 export default function Dashboard() {
   const { state, updateUserPassword, updateSettings, resetDatabase, sendWhatsAppMessage } = useClinic();
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState<'queue' | 'history' | 'users' | 'appointments' | 'courier' | 'shipments'>('queue');
+  const [activeTab, setActiveTab] = useState<'queue' | 'history' | 'users' | 'appointments' | 'online-appointments' | 'courier' | 'shipments'>('queue');
   const [delhiveryPrefill, setDelhiveryPrefill] = useState<any>(null);
   const [userRole, setUserRole] = useState<string | null>(null);
   const [username, setUsername] = useState<string | null>(null);
@@ -97,6 +98,14 @@ export default function Dashboard() {
               }`}
             >
               <Calendar className="w-4 h-4" /> Appointments
+            </button>
+            <button 
+              onClick={() => setActiveTab('online-appointments')}
+              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-2 ${
+                activeTab === 'online-appointments' ? 'bg-teal-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Video className="w-4 h-4" /> Online Consults
             </button>
             <button 
               onClick={() => setActiveTab('shipments')}
@@ -190,6 +199,12 @@ export default function Dashboard() {
         {activeTab === 'appointments' && (
           <div className="lg:col-span-12">
             <UpcomingAppointments />
+          </div>
+        )}
+
+        {activeTab === 'online-appointments' && (
+          <div className="lg:col-span-12">
+            <OnlineAppointments userRole={userRole} />
           </div>
         )}
 

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useClinic } from '../context/ClinicContext';
 import { useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Save, Plus, Trash2, ShieldAlert, Send, Package } from 'lucide-react';
+import { LayoutDashboard, Save, Plus, Trash2, ShieldAlert, Send, Package, CreditCard, Video, Bell, CheckCircle2, XCircle } from 'lucide-react';
 import { WhatsAppTemplate } from '../types';
 
 export default function SettingsPage() {
@@ -15,13 +15,37 @@ export default function SettingsPage() {
   const [newWarehousePincode, setNewWarehousePincode] = useState('');
   const [userRole, setUserRole] = useState<string | null>(null);
 
-  // Auth check
+  // Razorpay
+  const [showRazorpayUnlocked, setShowRazorpayUnlocked] = useState(false);
+  const [razorpayConfirmInput, setRazorpayConfirmInput] = useState('');
+
+  // Google
+  const [googleConnected, setGoogleConnected] = useState(false);
+  const [googleEmail, setGoogleEmail] = useState('');
+  const [googleStatusChecked, setGoogleStatusChecked] = useState(false);
+
+  // Auth check and Google status
   useEffect(() => {
     const authenticated = sessionStorage.getItem('staffAuthenticated');
     if (authenticated !== 'true') {
       navigate('/login');
     }
     setUserRole(sessionStorage.getItem('userRole'));
+
+    fetch('/api/google/status')
+      .then(res => res.json())
+      .then(data => {
+        setGoogleConnected(data.connected);
+        if (data.email) setGoogleEmail(data.email);
+        setGoogleStatusChecked(true);
+      })
+      .catch(console.error);
+
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('google') === 'connected') {
+      alert('Google Account Connected Successfully!');
+      window.history.replaceState({}, '', '/settings');
+    }
   }, [navigate]);
 
   // General Settings
@@ -157,6 +181,9 @@ export default function SettingsPage() {
           <button onClick={() => setActiveTab('email')} className={`text-left px-4 py-2 rounded-lg text-sm font-medium ${activeTab === 'email' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-50'}`}>Email Setup</button>
           <button onClick={() => setActiveTab('delhivery')} className={`text-left px-4 py-2 rounded-lg text-sm font-medium ${activeTab === 'delhivery' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-50'}`}>Delhivery API</button>
           <button onClick={() => setActiveTab('bulk')} className={`text-left px-4 py-2 rounded-lg text-sm font-medium ${activeTab === 'bulk' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-50'}`}>Bulk Messages</button>
+          <button onClick={() => setActiveTab('razorpay')} className={`text-left px-4 py-2 rounded-lg text-sm font-medium ${activeTab === 'razorpay' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-50'}`}>Razorpay API</button>
+          <button onClick={() => setActiveTab('google')} className={`text-left px-4 py-2 rounded-lg text-sm font-medium ${activeTab === 'google' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-50'}`}>Google Meet</button>
+          <button onClick={() => setActiveTab('notifications')} className={`text-left px-4 py-2 rounded-lg text-sm font-medium ${activeTab === 'notifications' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-50'}`}>Notifications</button>
         </div>
 
         <div className="flex-1 bg-white rounded-xl shadow-sm border border-slate-200 p-8 min-h-[500px]">
@@ -498,6 +525,148 @@ export default function SettingsPage() {
               <button onClick={handleSendBulk} className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 rounded-lg w-full flex items-center justify-center gap-2">
                 <Send className="w-5 h-5" /> Send to All
               </button>
+            </div>
+          )}
+
+          {activeTab === 'razorpay' && (
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+              <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+                <CreditCard className="w-5 h-5 text-indigo-600" /> Razorpay Integration
+              </h3>
+              
+              <div className="space-y-6">
+                <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
+                  <label className="block text-sm font-semibold text-slate-700 mb-2">Live API Credentials</label>
+                  {!showRazorpayUnlocked ? (
+                     <div className="flex gap-2">
+                       <input type="text" placeholder='Type "CHANGE" to unlock' className="flex-1 px-4 py-2 border rounded-lg text-sm" value={razorpayConfirmInput} onChange={e => setRazorpayConfirmInput(e.target.value)} />
+                       <button onClick={() => {
+                          if (razorpayConfirmInput.trim().toUpperCase() === 'CHANGE') {
+                            setShowRazorpayUnlocked(true);
+                            setRazorpayConfirmInput('');
+                          } else {
+                            alert('Please type "CHANGE" to unlock this setting.');
+                          }
+                       }} className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700">Unlock</button>
+                     </div>
+                  ) : (
+                     <div className="flex flex-col gap-3">
+                       <input type="text" value={state.settings.razorpayKeyId || ''} onChange={e => updateSettings({ razorpayKeyId: e.target.value })} className="w-full px-4 py-2 border rounded-lg text-sm" placeholder="Enter Razorpay Key ID" />
+                       <input type="password" value={state.settings.razorpayKeySecret || ''} onChange={e => updateSettings({ razorpayKeySecret: e.target.value })} className="w-full px-4 py-2 border rounded-lg text-sm" placeholder="Enter Razorpay Key Secret" />
+                       <button onClick={() => { setShowRazorpayUnlocked(false); }} className="w-fit px-6 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700">Save & Lock</button>
+                     </div>
+                  )}
+                </div>
+
+                <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
+                  <h4 className="font-semibold text-slate-700 mb-3">Consultation Rules</h4>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Consultation Fee (₹)</label>
+                      <input 
+                        type="number" 
+                        value={state.settings.consultationFee ? state.settings.consultationFee / 100 : ''} 
+                        onChange={e => updateSettings({ consultationFee: parseFloat(e.target.value) * 100 })} 
+                        className="w-full px-4 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500" 
+                        placeholder="e.g. 500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Follow-up Free Days</label>
+                      <input 
+                        type="number" 
+                        value={state.settings.followUpFreeDays || 7} 
+                        onChange={e => updateSettings({ followUpFreeDays: parseInt(e.target.value, 10) })} 
+                        className="w-full px-4 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500" 
+                        placeholder="e.g. 7"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'google' && (
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+              <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+                <Video className="w-5 h-5 text-indigo-600" /> Google Meet Integration
+              </h3>
+              
+              <div className="space-y-6">
+                <div className="bg-slate-50 p-6 rounded-xl border border-slate-100 flex items-center justify-between">
+                  <div>
+                    <h4 className="font-semibold text-slate-800 mb-1">Connection Status</h4>
+                    {googleStatusChecked ? (
+                      googleConnected ? (
+                        <div className="flex items-center gap-2 text-emerald-600 text-sm font-medium">
+                          <CheckCircle2 className="w-4 h-4" />
+                          Connected as {googleEmail}
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2 text-rose-600 text-sm font-medium">
+                          <XCircle className="w-4 h-4" />
+                          Not Connected
+                        </div>
+                      )
+                    ) : (
+                      <div className="text-sm text-slate-500">Checking status...</div>
+                    )}
+                  </div>
+                  <div>
+                    {googleConnected ? (
+                      <button onClick={() => { /* Implement disconnect if needed */ alert('Please disconnect from Google Account settings.'); }} className="px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors">Disconnect</button>
+                    ) : (
+                      <button onClick={() => { window.location.href = '/api/google/auth'; }} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors">Connect Google Account</button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
+                  <h4 className="font-semibold text-slate-700 mb-3">OAuth Credentials</h4>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Google Client ID</label>
+                      <input 
+                        type="text" 
+                        value={state.settings.googleOauthClientId || '715658585090-ijo4cn4qf0erak1jl2fucdstllqieosh.apps.googleusercontent.com'} 
+                        onChange={e => updateSettings({ googleOauthClientId: e.target.value })} 
+                        className="w-full px-4 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500" 
+                        placeholder="Enter Client ID"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Google Client Secret</label>
+                      <input 
+                        type="password" 
+                        value={state.settings.googleOauthClientSecret || ''} 
+                        onChange={e => updateSettings({ googleOauthClientSecret: e.target.value })} 
+                        className="w-full px-4 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500" 
+                        placeholder="Enter Client Secret"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'notifications' && (
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+              <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+                <Bell className="w-5 h-5 text-indigo-600" /> Notification Emails
+              </h3>
+              
+              <div className="space-y-4">
+                <p className="text-sm text-slate-600">Enter email addresses to receive notifications about new appointments, reschedules, and cancellations.</p>
+                
+                <textarea 
+                  value={state.settings.notificationEmails || ''} 
+                  onChange={e => updateSettings({ notificationEmails: e.target.value })} 
+                  className="w-full h-32 px-4 py-3 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500" 
+                  placeholder="doctor@example.com, staff@example.com"
+                />
+              </div>
             </div>
           )}
         </div>

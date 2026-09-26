@@ -73,6 +73,17 @@ export const settings = mysqlTable("settings", {
   emailAutoCheckIn: boolean("email_auto_check_in").default(true),
   delhiveryApiKey: text("delhivery_api_key"),
   delhiveryWarehouses: text("delhivery_warehouses"),
+  razorpayKeyId: text("razorpay_key_id"),
+  razorpayKeySecret: text("razorpay_key_secret"),
+  consultationFee: int("consultation_fee").default(19900),
+  googleOauthClientId: text("google_oauth_client_id"),
+  googleOauthClientSecret: text("google_oauth_client_secret"),
+  googleOauthRefreshToken: text("google_oauth_refresh_token"),
+  googleOauthAccessToken: text("google_oauth_access_token"),
+  googleOauthTokenExpiry: text("google_oauth_token_expiry"),
+  googleCalendarEmail: text("google_calendar_email"),
+  notificationEmails: text("notification_emails"),
+  followUpFreeDays: int("follow_up_free_days").default(7),
 });
 
 export const whatsappMessages = mysqlTable("whatsapp_messages", {
@@ -123,4 +134,60 @@ export const patientShipments = mysqlTable("patient_shipments", {
   status: varchar("status", { length: 50 }).notNull().default("Pending"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   completedAt: timestamp("completed_at"),
+});
+
+export const onlineAppointments = mysqlTable("online_appointments", {
+  id: varchar("id", { length: 191 }).primaryKey(),
+  patientName: text("patient_name").notNull(),
+  phone: varchar("phone", { length: 20 }).notNull(),
+  email: varchar("email", { length: 255 }).notNull(),
+  patientType: varchar("patient_type", { length: 20 }).notNull(),
+  shortAddress: text("short_address"),
+  lastVisitDate: varchar("last_visit_date", { length: 20 }),
+  healthConcern: varchar("health_concern", { length: 100 }).notNull(),
+  healthConcernDetail: text("health_concern_detail"),
+  wantsCourierMedicine: boolean("wants_courier_medicine").default(false),
+  courierAddress: text("courier_address"),
+  courierContact: varchar("courier_contact", { length: 20 }),
+  courierPincode: varchar("courier_pincode", { length: 10 }),
+  appointmentDate: varchar("appointment_date", { length: 20 }),
+  timeSlot: varchar("time_slot", { length: 20 }),
+  slotEnd: varchar("slot_end", { length: 20 }),
+  razorpayOrderId: varchar("razorpay_order_id", { length: 100 }),
+  razorpayPaymentId: varchar("razorpay_payment_id", { length: 100 }),
+  razorpaySignature: varchar("razorpay_signature", { length: 255 }),
+  paymentStatus: varchar("payment_status", { length: 20 }).default('pending'),
+  paymentAmount: int("payment_amount"),
+  meetLink: text("meet_link"),
+  googleEventId: varchar("google_event_id", { length: 255 }),
+  clinicId: varchar("clinic_id", { length: 50 }),
+  status: varchar("status", { length: 30 }).default('confirmed'),
+  rescheduleCount: int("reschedule_count").default(0),
+  isFollowUpFree: boolean("is_follow_up_free").default(false),
+  confirmationEmailSent: boolean("confirmation_email_sent").default(false),
+  reminder2hSent: boolean("reminder_2h_sent").default(false),
+  reminder1hSent: boolean("reminder_1h_sent").default(false),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at"),
+});
+
+export const appointmentFiles = mysqlTable("appointment_files", {
+  id: varchar("id", { length: 191 }).primaryKey(),
+  appointmentId: varchar("appointment_id", { length: 191 }).notNull(),
+  originalName: text("original_name").notNull(),
+  storedPath: text("stored_path").notNull(),
+  mimeType: varchar("mime_type", { length: 100 }),
+  sizeBytes: int("size_bytes"),
+  uploadedAt: timestamp("uploaded_at").notNull().defaultNow(),
+});
+
+export const rescheduleOtps = mysqlTable("reschedule_otps", {
+  id: varchar("id", { length: 191 }).primaryKey(),
+  appointmentId: varchar("appointment_id", { length: 191 }).notNull(),
+  email: varchar("email", { length: 255 }).notNull(),
+  otp: varchar("otp", { length: 10 }).notNull(),
+  expiresAt: timestamp("expires_at").notNull(),
+  verified: boolean("verified").default(false),
+  attempts: int("attempts").default(0),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
 });

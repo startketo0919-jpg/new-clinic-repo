@@ -1170,6 +1170,15 @@ export default function LabelCropModal({ isOpen, onClose, initialUrl, initialAwb
                   Close
                 </button>
                 <a
+                  href="/TVS-Print-Bridge-Silent.vbs"
+                  download="TVS-Print-Bridge-Silent.vbs"
+                  className="px-3 py-2 text-xs font-semibold text-slate-600 hover:text-indigo-600 hover:bg-slate-100 rounded-xl flex items-center gap-1.5 cursor-pointer"
+                  title="Run invisibly in background without taskbar icon"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Silent Launcher (.vbs)</span>
+                </a>
+                <a
                   href="/TVS-Print-Bridge.bat"
                   download="TVS-Print-Bridge.bat"
                   className="px-4 py-2 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl shadow-sm flex items-center gap-2 cursor-pointer"

@@ -128,8 +128,87 @@ export async function initDb() {
       status VARCHAR(50) NOT NULL DEFAULT 'Pending',
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       completed_at TIMESTAMP NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`,
+
+    `CREATE TABLE IF NOT EXISTS online_appointments (
+      id VARCHAR(191) PRIMARY KEY,
+      patient_name TEXT NOT NULL,
+      phone VARCHAR(20) NOT NULL,
+      email VARCHAR(255) NOT NULL,
+      patient_type VARCHAR(20) NOT NULL,
+      short_address TEXT,
+      last_visit_date VARCHAR(20),
+      health_concern VARCHAR(100) NOT NULL,
+      health_concern_detail TEXT,
+      wants_courier_medicine BOOLEAN DEFAULT FALSE,
+      courier_address TEXT,
+      courier_contact VARCHAR(20),
+      courier_pincode VARCHAR(10),
+      appointment_date VARCHAR(20),
+      time_slot VARCHAR(20),
+      slot_end VARCHAR(20),
+      razorpay_order_id VARCHAR(100),
+      razorpay_payment_id VARCHAR(100),
+      razorpay_signature VARCHAR(255),
+      payment_status VARCHAR(20) DEFAULT 'pending',
+      payment_amount INT,
+      meet_link TEXT,
+      google_event_id VARCHAR(255),
+      clinic_id VARCHAR(50),
+      status VARCHAR(30) DEFAULT 'confirmed',
+      reschedule_count INT DEFAULT 0,
+      is_follow_up_free BOOLEAN DEFAULT FALSE,
+      confirmation_email_sent BOOLEAN DEFAULT FALSE,
+      reminder_2h_sent BOOLEAN DEFAULT FALSE,
+      reminder_1h_sent BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`,
+
+    `CREATE TABLE IF NOT EXISTS appointment_files (
+      id VARCHAR(191) PRIMARY KEY,
+      appointment_id VARCHAR(191) NOT NULL,
+      original_name TEXT NOT NULL,
+      stored_path TEXT NOT NULL,
+      mime_type VARCHAR(100),
+      size_bytes INT,
+      uploaded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`,
+
+    `CREATE TABLE IF NOT EXISTS reschedule_otps (
+      id VARCHAR(191) PRIMARY KEY,
+      appointment_id VARCHAR(191) NOT NULL,
+      email VARCHAR(255) NOT NULL,
+      otp VARCHAR(10) NOT NULL,
+      expires_at TIMESTAMP NOT NULL,
+      verified BOOLEAN DEFAULT FALSE,
+      attempts INT DEFAULT 0,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`
   ];
+
+  // Schema migrations for new settings columns
+  const alterSettingsQueries = [
+    `ALTER TABLE settings ADD COLUMN IF NOT EXISTS razorpay_key_id TEXT;`,
+    `ALTER TABLE settings ADD COLUMN IF NOT EXISTS razorpay_key_secret TEXT;`,
+    `ALTER TABLE settings ADD COLUMN IF NOT EXISTS consultation_fee INT DEFAULT 19900;`,
+    `ALTER TABLE settings ADD COLUMN IF NOT EXISTS google_oauth_client_id TEXT;`,
+    `ALTER TABLE settings ADD COLUMN IF NOT EXISTS google_oauth_client_secret TEXT;`,
+    `ALTER TABLE settings ADD COLUMN IF NOT EXISTS google_oauth_refresh_token TEXT;`,
+    `ALTER TABLE settings ADD COLUMN IF NOT EXISTS google_oauth_access_token TEXT;`,
+    `ALTER TABLE settings ADD COLUMN IF NOT EXISTS google_oauth_token_expiry TEXT;`,
+    `ALTER TABLE settings ADD COLUMN IF NOT EXISTS google_calendar_email TEXT;`,
+    `ALTER TABLE settings ADD COLUMN IF NOT EXISTS notification_emails TEXT;`,
+    `ALTER TABLE settings ADD COLUMN IF NOT EXISTS follow_up_free_days INT DEFAULT 7;`
+  ];
+
+  for (const alterQ of alterSettingsQueries) {
+    try {
+      await pool.query(alterQ);
+    } catch (err: any) {
+      // Ignore if syntax doesn't support IF NOT EXISTS or column exists
+    }
+  }
 
   for (const q of queries) {
     try {

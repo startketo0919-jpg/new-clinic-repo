@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Stethoscope, Monitor, Smartphone, UserRound, Lock, KeyRound, Mail, ArrowLeft, RefreshCw, CheckCircle2 } from 'lucide-react';
+import { Stethoscope, Monitor, Smartphone, UserRound, Lock, KeyRound, Mail, ArrowLeft, RefreshCw, CheckCircle2, Calendar } from 'lucide-react';
 import { useClinic } from '../context/ClinicContext';
 
 export default function Login() {
@@ -610,6 +610,29 @@ export default function Login() {
               <Monitor className="w-4 h-4" />
               Open Waiting Room TV
             </button>
+
+            {/* Patient Portal Section */}
+            <div className="mt-4 border-t border-slate-200 pt-6">
+              <div className="flex items-center justify-center gap-2 mb-4 text-slate-700 font-bold text-lg">
+                <span>🏥</span> Patient Portal
+              </div>
+              <div className="flex flex-col gap-3 items-center">
+                <button
+                  onClick={() => navigate('/book-appointment')}
+                  className="w-full flex items-center justify-center gap-2 text-white font-semibold py-3 px-6 rounded-xl transition-all shadow-sm text-sm"
+                  style={{ backgroundColor: '#2d3b2d' }}
+                >
+                  <Calendar className="w-4 h-4" />
+                  Book Online Appointment
+                </button>
+                <button
+                  onClick={() => navigate('/reschedule')}
+                  className="text-sm text-slate-500 hover:text-slate-800 font-medium underline"
+                >
+                  Reschedule Appointment
+                </button>
+              </div>
+            </div>
 
           </div>
         </div>

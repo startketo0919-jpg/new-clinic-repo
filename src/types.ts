@@ -94,6 +94,17 @@ export interface ClinicState {
     emailAutoCheckIn?: boolean;
     delhiveryApiKey?: string;
     delhiveryWarehouses?: string;
+    razorpayKeyId?: string;
+    razorpayKeySecret?: string;
+    consultationFee?: number;
+    googleOauthClientId?: string;
+    googleOauthClientSecret?: string;
+    googleOauthRefreshToken?: string;
+    googleOauthAccessToken?: string;
+    googleOauthTokenExpiry?: string;
+    googleCalendarEmail?: string;
+    notificationEmails?: string;
+    followUpFreeDays?: number;
   };
   templates: WhatsAppTemplate[];
 }

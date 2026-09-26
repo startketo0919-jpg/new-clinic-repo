@@ -13,6 +13,8 @@ import WaitingRoom from './pages/WaitingRoom';
 import PatientTracker from './pages/PatientTracker';
 import PatientShipmentForm from './pages/PatientShipmentForm';
 import SetupPage from './pages/SetupPage';
+import BookAppointment from './pages/BookAppointment';
+import RescheduleAppointment from './pages/RescheduleAppointment';
 
 export default function App() {
   return (
@@ -30,6 +32,8 @@ export default function App() {
           <Route path="/shipment" element={<PatientShipmentForm />} />
           <Route path="/shipment-form" element={<PatientShipmentForm />} />
           <Route path="/courier-form" element={<PatientShipmentForm />} />
+          <Route path="/book-appointment" element={<BookAppointment />} />
+          <Route path="/reschedule" element={<RescheduleAppointment />} />
         </Routes>
       </BrowserRouter>
     </ClinicProvider>
