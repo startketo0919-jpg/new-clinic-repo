@@ -259,12 +259,29 @@ export default function BookAppointment() {
         }).catch(err => console.error("Upload error:", err));
       }
 
-      if (orderData.isFree || amount === 0 || !window.Razorpay) {
-        // Free or no Razorpay -> auto advance
+      if (orderData.isFree || amount === 0) {
+        // Free follow-up -> auto advance
         updateForm('paymentStatus', 'completed');
         setLoading(false);
         nextStep();
         return;
+      }
+
+      // Ensure Razorpay SDK is loaded
+      const loadRazorpay = (): Promise<boolean> => {
+        return new Promise(resolve => {
+          if ((window as any).Razorpay) return resolve(true);
+          const script = document.createElement('script');
+          script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+          script.onload = () => resolve(true);
+          script.onerror = () => resolve(false);
+          document.body.appendChild(script);
+        });
+      };
+
+      const razorpayLoaded = await loadRazorpay();
+      if (!razorpayLoaded || !(window as any).Razorpay) {
+        throw new Error('Could not load payment gateway. Please check your internet connection.');
       }
 
       // Initialize Razorpay
@@ -286,7 +303,7 @@ export default function BookAppointment() {
         handler: async function (response: any) {
           // Verify payment
           try {
-            await fetch('/api/appointments/verify-payment', {
+            const vRes = await fetch('/api/appointments/verify-payment', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
@@ -294,10 +311,14 @@ export default function BookAppointment() {
                 appointmentId: currentApptId
               })
             });
+            const vData = await vRes.json();
+            if (!vRes.ok) {
+              throw new Error(vData.error || 'Payment verification failed');
+            }
             updateForm('paymentStatus', 'completed');
             nextStep();
-          } catch (err) {
-            setError('Payment verification failed. Please contact support.');
+          } catch (err: any) {
+            setError(err.message || 'Payment verification failed. Please contact support.');
           }
         },
       };
