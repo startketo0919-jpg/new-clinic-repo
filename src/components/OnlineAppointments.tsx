@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Calendar, Video, Phone, Mail, Download, RefreshCw, Search, Filter, ChevronDown, ChevronUp, Check, X, FileText, MapPin, ExternalLink, CalendarDays, List } from 'lucide-react';
+import { Calendar, Video, Phone, Mail, Download, RefreshCw, Search, Filter, ChevronDown, ChevronUp, Check, X, Trash2, FileText, MapPin, ExternalLink, CalendarDays, List } from 'lucide-react';
 import { format, startOfMonth, endOfMonth, startOfWeek, endOfWeek, eachDayOfInterval, isSameMonth, isSameDay, isToday, addMonths, subMonths, parseISO } from 'date-fns';
 import { cn } from '../lib/utils';
 import { getLocalTodayString } from '../lib/dateUtils';
@@ -12,10 +12,10 @@ interface OnlineAppointment {
   date: string; // ISO string
   time: string;
   healthConcern: string;
-  paymentStatus: 'Paid' | 'Free' | 'Refunded';
+  paymentStatus: 'Paid' | 'Free' | 'Refunded' | 'Pending';
   amount: number;
   meetLink?: string;
-  status: 'Confirmed' | 'Rescheduled' | 'Completed' | 'Cancelled';
+  status: 'Confirmed' | 'Rescheduled' | 'Completed' | 'Cancelled' | 'Pending_slot';
   files: Array<{ name: string; url: string }>;
   courierRequested: boolean;
   courierInfo?: {
@@ -56,7 +56,15 @@ export default function OnlineAppointments({ userRole }: { userRole?: string | n
           date: a.appointment_date || a.date || '',
           time: a.time_slot || a.time || '',
           healthConcern: a.health_concern || a.healthConcern || '',
-          paymentStatus: (a.payment_status === 'paid' ? 'Paid' : a.is_follow_up_free ? 'Free' : a.payment_status === 'refunded' ? 'Refunded' : 'Paid') as any,
+          paymentStatus: (
+            a.payment_status === 'paid'
+              ? 'Paid'
+              : a.is_follow_up_free
+                ? 'Free'
+                : a.payment_status === 'refunded'
+                  ? 'Refunded'
+                  : 'Pending'
+          ),
           amount: a.payment_amount ? a.payment_amount / 100 : 0,
           meetLink: a.meet_link || a.meetLink,
           status: (a.status ? a.status.charAt(0).toUpperCase() + a.status.slice(1) : 'Confirmed') as any,
@@ -92,29 +100,50 @@ export default function OnlineAppointments({ userRole }: { userRole?: string | n
     return () => eventSource.close();
   }, []);
 
-  const handleAction = async (action: 'complete' | 'refund', app: OnlineAppointment) => {
-    if (action === 'refund' && !window.confirm('Are you sure you want to cancel and refund this appointment?')) {
-      return;
-    }
-    
+  const handleAction = async (action: 'complete' | 'refund' | 'delete', app: OnlineAppointment) => {
     try {
       if (action === 'complete') {
-        await fetch('/api/online-appointments/' + app.id + '/complete', {
+        const res = await fetch('/api/online-appointments/' + app.id + '/complete', {
           method: 'PATCH'
         });
-        // Optimistic update
-        setAppointments(prev => prev.map(a => a.id === app.id ? { ...a, status: 'Completed' } : a));
+        if (res.ok) {
+          setAppointments(prev => prev.map(a => a.id === app.id ? { ...a, status: 'Completed' } : a));
+        } else {
+          const err = await res.json().catch(() => ({}));
+          alert(err.error || 'Failed to complete appointment');
+        }
       } else if (action === 'refund') {
-        await fetch('/api/appointments/refund', {
+        if (!window.confirm(`Are you sure you want to cancel and refund ₹${app.amount} for ${app.patientName}?`)) {
+          return;
+        }
+        const res = await fetch('/api/appointments/refund', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ appointmentId: app.id })
         });
-        // Optimistic update
-        setAppointments(prev => prev.map(a => a.id === app.id ? { ...a, status: 'Cancelled', paymentStatus: 'Refunded' } : a));
+        if (res.ok) {
+          setAppointments(prev => prev.map(a => a.id === app.id ? { ...a, status: 'Cancelled', paymentStatus: 'Refunded' } : a));
+        } else {
+          const err = await res.json().catch(() => ({}));
+          alert(err.error || 'Refund failed');
+        }
+      } else if (action === 'delete') {
+        if (!window.confirm(`Are you sure you want to delete the appointment for ${app.patientName}? This action cannot be undone.`)) {
+          return;
+        }
+        const res = await fetch('/api/online-appointments/' + app.id, {
+          method: 'DELETE'
+        });
+        if (res.ok) {
+          setAppointments(prev => prev.filter(a => a.id !== app.id));
+        } else {
+          const err = await res.json().catch(() => ({}));
+          alert(err.error || 'Failed to delete appointment');
+        }
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error('Action failed:', e);
+      alert('Action failed: ' + (e?.message || 'Unknown error'));
     }
   };
 
@@ -221,6 +250,7 @@ export default function OnlineAppointments({ userRole }: { userRole?: string | n
                   <option value="Rescheduled">Rescheduled</option>
                   <option value="Completed">Completed</option>
                   <option value="Cancelled">Cancelled</option>
+                  <option value="Pending_slot">Pending Slot</option>
                 </select>
               </div>
 
@@ -307,9 +337,13 @@ export default function OnlineAppointments({ userRole }: { userRole?: string | n
                               <span className="inline-flex px-2 py-1 rounded text-xs font-semibold bg-blue-100 text-blue-700">
                                 FREE
                               </span>
-                            ) : (
+                            ) : app.paymentStatus === 'Refunded' ? (
                               <span className="inline-flex px-2 py-1 rounded text-xs font-semibold bg-rose-100 text-rose-700">
                                 Refunded
+                              </span>
+                            ) : (
+                              <span className="inline-flex px-2 py-1 rounded text-xs font-semibold bg-amber-100 text-amber-800 border border-amber-200">
+                                {app.amount > 0 ? `₹${app.amount} Unpaid` : 'Pending'}
                               </span>
                             )}
                           </td>
@@ -334,12 +368,13 @@ export default function OnlineAppointments({ userRole }: { userRole?: string | n
                               'bg-blue-50 text-blue-700 border-blue-200': app.status === 'Rescheduled',
                               'bg-slate-100 text-slate-700 border-slate-300': app.status === 'Completed',
                               'bg-rose-50 text-rose-700 border-rose-200': app.status === 'Cancelled',
+                              'bg-amber-50 text-amber-700 border-amber-200': (app.status as string) === 'Pending_slot' || (app.status as string).toLowerCase().includes('pending'),
                             })}>
-                              {app.status}
+                              {(app.status as string) === 'Pending_slot' ? 'Pending Slot' : app.status}
                             </span>
                           </td>
                           <td className="px-4 py-3 text-right">
-                            <div className="flex justify-end gap-2" onClick={e => e.stopPropagation()}>
+                            <div className="flex justify-end gap-1.5" onClick={e => e.stopPropagation()}>
                               {app.status !== 'Completed' && app.status !== 'Cancelled' && (
                                 <button 
                                   onClick={() => handleAction('complete', app)}
@@ -349,15 +384,22 @@ export default function OnlineAppointments({ userRole }: { userRole?: string | n
                                   <Check className="w-4 h-4" />
                                 </button>
                               )}
-                              {app.status !== 'Cancelled' && userRole === 'admin' && (
+                              {app.paymentStatus === 'Paid' && app.status !== 'Cancelled' && (
                                 <button 
                                   onClick={() => handleAction('refund', app)}
-                                  className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition-colors border border-transparent hover:border-rose-200"
+                                  className="p-1.5 text-amber-600 hover:bg-amber-50 rounded-lg transition-colors border border-transparent hover:border-amber-200"
                                   title="Cancel & Refund"
                                 >
                                   <X className="w-4 h-4" />
                                 </button>
                               )}
+                              <button 
+                                onClick={() => handleAction('delete', app)}
+                                className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition-colors border border-transparent hover:border-rose-200"
+                                title="Delete Appointment"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
                               <button className="p-1.5 text-slate-400 hover:bg-slate-100 rounded-lg transition-colors ml-1">
                                 {expandedRows.has(app.id) ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                               </button>

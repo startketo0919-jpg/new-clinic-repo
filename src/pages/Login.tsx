@@ -255,7 +255,40 @@ export default function Login() {
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
       <div className="max-w-4xl w-full grid grid-cols-1 md:grid-cols-2 gap-6">
         
-        {/* Staff/Admin Login Card */}
+        {/* Patient Portal Card (Left Side) */}
+        <div className="bg-white rounded-2xl shadow-xl overflow-hidden border border-slate-100 flex flex-col">
+          <div className="bg-teal-600 p-8 text-white flex-grow-0">
+            <div className="flex items-center gap-3 mb-2">
+              <Smartphone className="w-8 h-8 text-teal-100" />
+              <h2 className="text-2xl font-bold">Patient Portal</h2>
+            </div>
+            <p className="text-teal-50">Book video consultations, track live queue, and schedule visits.</p>
+          </div>
+          <div className="p-8 flex flex-col gap-4 flex-grow justify-center">
+            <button
+              onClick={() => navigate('/book-appointment')}
+              className="w-full flex items-center justify-center gap-2 bg-teal-600 hover:bg-teal-700 text-white font-semibold py-3.5 px-6 rounded-xl transition-all shadow-sm text-sm"
+            >
+              <Calendar className="w-4 h-4" />
+              Book Online Appointment
+            </button>
+            <button 
+              onClick={() => navigate('/track')}
+              className="w-full flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-900 text-white font-semibold py-3.5 px-6 rounded-xl transition-all shadow-sm text-sm"
+            >
+              <Smartphone className="w-4 h-4" />
+              Open Patient Tracker
+            </button>
+            <button
+              onClick={() => navigate('/reschedule')}
+              className="text-sm text-slate-500 hover:text-slate-800 font-medium underline text-center mt-1"
+            >
+              Reschedule Appointment
+            </button>
+          </div>
+        </div>
+
+        {/* Staff/Admin Login Card (Right Side) */}
         <div className="bg-white rounded-2xl shadow-xl overflow-hidden border border-slate-100 flex flex-col">
           <div className="bg-slate-800 p-8 text-white flex-grow-0">
             <div className="flex items-center gap-3 mb-2">
@@ -611,49 +644,6 @@ export default function Login() {
               Open Waiting Room TV
             </button>
 
-            {/* Patient Portal Section */}
-            <div className="mt-4 border-t border-slate-200 pt-6">
-              <div className="flex items-center justify-center gap-2 mb-4 text-slate-700 font-bold text-lg">
-                <span>🏥</span> Patient Portal
-              </div>
-              <div className="flex flex-col gap-3 items-center">
-                <button
-                  onClick={() => navigate('/book-appointment')}
-                  className="w-full flex items-center justify-center gap-2 text-white font-semibold py-3 px-6 rounded-xl transition-all shadow-sm text-sm"
-                  style={{ backgroundColor: '#2d3b2d' }}
-                >
-                  <Calendar className="w-4 h-4" />
-                  Book Online Appointment
-                </button>
-                <button
-                  onClick={() => navigate('/reschedule')}
-                  className="text-sm text-slate-500 hover:text-slate-800 font-medium underline"
-                >
-                  Reschedule Appointment
-                </button>
-              </div>
-            </div>
-
-          </div>
-        </div>
-
-        {/* Patient Access Card */}
-        <div className="bg-white rounded-2xl shadow-xl overflow-hidden border border-slate-100 flex flex-col">
-          <div className="bg-teal-600 p-8 text-white flex-grow-0">
-            <div className="flex items-center gap-3 mb-2">
-              <Smartphone className="w-8 h-8 text-teal-100" />
-              <h2 className="text-2xl font-bold">Patient Portal</h2>
-            </div>
-            <p className="text-teal-50">Track your live queue status and schedule appointments.</p>
-          </div>
-          <div className="p-8 flex flex-col gap-4 flex-grow justify-center">
-             <button 
-               onClick={() => navigate('/track')}
-              className="w-full flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-900 text-white font-semibold py-3 px-6 rounded-xl transition-all shadow-sm"
-            >
-              <Smartphone className="w-5 h-5" />
-              Open Patient Tracker
-            </button>
           </div>
         </div>
 

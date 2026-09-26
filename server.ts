@@ -2604,7 +2604,56 @@ app.patch('/api/online-appointments/:id/complete', requireStaffAuth, async (req:
   }
 });
 
-// 12. Refund appointment (admin)
+// Delete online appointment (staff/admin)
+app.delete('/api/online-appointments/:id', requireStaffAuth, async (req: AuthRequest, res) => {
+  try {
+    const { id } = req.params;
+    const [aptRows]: any = await pool.query('SELECT * FROM online_appointments WHERE id = ?', [id]);
+    if (aptRows.length === 0) return res.status(404).json({ error: 'Appointment not found' });
+    const apt = aptRows[0];
+
+    // Delete Google Calendar event if any
+    try {
+      const s = await getAppointmentSettings();
+      if (apt.google_event_id && s.google_oauth_refresh_token) {
+        let accessToken = s.google_oauth_access_token || '';
+        if (!accessToken || (s.google_oauth_token_expiry && new Date(s.google_oauth_token_expiry) <= new Date())) {
+          const refreshed = await refreshAccessToken(s.google_oauth_client_id, s.google_oauth_client_secret, s.google_oauth_refresh_token);
+          accessToken = refreshed.accessToken;
+        }
+        await deleteMeetEvent({
+          accessToken,
+          clientId: s.google_oauth_client_id,
+          clientSecret: s.google_oauth_client_secret,
+          refreshToken: s.google_oauth_refresh_token,
+          doctorEmail: s.google_calendar_email || '',
+          eventId: apt.google_event_id
+        });
+      }
+    } catch (e) {
+      console.error('[Delete] Calendar delete failed:', e);
+    }
+
+    // Delete associated files from disk and DB
+    const [files]: any = await pool.query('SELECT stored_path FROM appointment_files WHERE appointment_id = ?', [id]);
+    for (const f of files) {
+      if (f.stored_path && fs.existsSync(f.stored_path)) {
+        try { fs.unlinkSync(f.stored_path); } catch (e) {}
+      }
+    }
+    await pool.query('DELETE FROM appointment_files WHERE appointment_id = ?', [id]);
+    await pool.query('DELETE FROM reschedule_otps WHERE appointment_id = ?', [id]);
+    await pool.query('DELETE FROM online_appointments WHERE id = ?', [id]);
+
+    notifyClients();
+    res.json({ success: true, message: 'Appointment deleted successfully' });
+  } catch (err: any) {
+    console.error('[Delete Appointment] Error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 12. Refund or Cancel appointment (admin)
 app.post('/api/appointments/refund', requireAdminAuth, async (req: AuthRequest, res) => {
   try {
     const { appointmentId } = req.body;
@@ -2613,18 +2662,10 @@ app.post('/api/appointments/refund', requireAdminAuth, async (req: AuthRequest, 
     const apt = aptRows[0];
     
     if (apt.payment_status === 'refunded') return res.status(400).json({ error: 'Already refunded' });
-    if (!apt.razorpay_payment_id) return res.status(400).json({ error: 'No payment to refund' });
     
-    // Initiate Razorpay refund
     const s = await getAppointmentSettings();
-    const Razorpay = (await import('razorpay')).default;
-    const rzp = new Razorpay({ key_id: s.razorpay_key_id, key_secret: s.razorpay_key_secret });
-    await rzp.payments.refund(apt.razorpay_payment_id, { amount: apt.payment_amount });
-    
-    // Update status
-    await pool.query(`UPDATE online_appointments SET payment_status = 'refunded', status = 'cancelled', updated_at = NOW() WHERE id = ?`, [appointmentId]);
-    
-    // Delete Google Calendar event
+
+    // Delete Google Calendar event if any
     if (apt.google_event_id && s.google_oauth_refresh_token) {
       try {
         let accessToken = s.google_oauth_access_token || '';
@@ -2632,25 +2673,53 @@ app.post('/api/appointments/refund', requireAdminAuth, async (req: AuthRequest, 
           const refreshed = await refreshAccessToken(s.google_oauth_client_id, s.google_oauth_client_secret, s.google_oauth_refresh_token);
           accessToken = refreshed.accessToken;
         }
-        await deleteMeetEvent({ accessToken, clientId: s.google_oauth_client_id, clientSecret: s.google_oauth_client_secret, refreshToken: s.google_oauth_refresh_token, doctorEmail: s.google_calendar_email || '', eventId: apt.google_event_id });
-      } catch (e) { console.error('[Refund] Calendar delete failed:', e); }
+        await deleteMeetEvent({
+          accessToken,
+          clientId: s.google_oauth_client_id,
+          clientSecret: s.google_oauth_client_secret,
+          refreshToken: s.google_oauth_refresh_token,
+          doctorEmail: s.google_calendar_email || '',
+          eventId: apt.google_event_id
+        });
+      } catch (e) {
+        console.error('[Refund] Calendar delete failed:', e);
+      }
     }
-    
-    // Send refund email
-    try {
-      const emailHtml = buildRefundEmail({
-        patientName: apt.patient_name, appointmentId,
-        date: apt.appointment_date, timeSlot: apt.time_slot,
-        refundAmount: apt.payment_amount, paymentRef: apt.razorpay_payment_id
-      });
-      await sendPatientEmail(s, apt.email, `Appointment Cancelled & Refund Initiated - ${appointmentId}`, emailHtml);
-    } catch (e) { console.error('[Refund] Email failed:', e); }
-    
-    notifyClients();
-    res.json({ success: true, message: 'Refund initiated successfully' });
+
+    // Process refund if payment ID exists and was paid
+    if (apt.razorpay_payment_id && apt.payment_status === 'paid') {
+      try {
+        const Razorpay = (await import('razorpay')).default;
+        const rzp = new Razorpay({ key_id: s.razorpay_key_id, key_secret: s.razorpay_key_secret });
+        await rzp.payments.refund(apt.razorpay_payment_id, { amount: apt.payment_amount });
+      } catch (rzpErr) {
+        console.error('[Refund] Razorpay refund error:', rzpErr);
+      }
+      
+      await pool.query(`UPDATE online_appointments SET payment_status = 'refunded', status = 'cancelled', updated_at = NOW() WHERE id = ?`, [appointmentId]);
+      
+      try {
+        const emailHtml = buildRefundEmail({
+          patientName: apt.patient_name, appointmentId,
+          date: apt.appointment_date, timeSlot: apt.time_slot,
+          refundAmount: apt.payment_amount, paymentRef: apt.razorpay_payment_id
+        });
+        await sendPatientEmail(s, apt.email, `Appointment Cancelled & Refund Initiated - ${appointmentId}`, emailHtml);
+      } catch (e) {
+        console.error('[Refund] Email failed:', e);
+      }
+      
+      notifyClients();
+      return res.json({ success: true, message: 'Refund initiated successfully' });
+    } else {
+      // Unpaid or free appointment - cancel directly
+      await pool.query(`UPDATE online_appointments SET status = 'cancelled', updated_at = NOW() WHERE id = ?`, [appointmentId]);
+      notifyClients();
+      return res.json({ success: true, message: 'Appointment cancelled successfully' });
+    }
   } catch (err: any) {
     console.error('[Refund] Error:', err);
-    res.status(500).json({ error: 'Failed to process refund' });
+    res.status(500).json({ error: 'Failed to process cancellation/refund' });
   }
 });
 
