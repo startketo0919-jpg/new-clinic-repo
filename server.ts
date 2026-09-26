@@ -86,25 +86,6 @@ async function startServer() {
       const dbSettings = await db.select().from(settings).where(eq(settings.id, "default")).limit(1);
       let dbUsers = await db.select().from(users);
 
-      // Admin auto‑seed removed. First‑run admin creation is handled via /setup routes.
-        try {
-                      if (!process.env.SUPERADMIN_PASSWORD) {
-              console.error('[Users] SUPERADMIN_PASSWORD not set. Exiting.');
-              process.exit(1);
-            }
-            const superAdminPassword = process.env.SUPERADMIN_PASSWORD;
-          const hashed = hashPassword(superAdminPassword);
-          await pool.query(`
-            INSERT INTO users (id, username, password_hash, role, email) 
-            VALUES ('1', 'suyash', ?, 'admin', 'skgservicesin@gmail.com')
-            ON DUPLICATE KEY UPDATE password_hash = VALUES(password_hash), role = 'admin', email = 'skgservicesin@gmail.com';
-          `, [hashed]);
-          dbUsers = await db.select().from(users);
-        } catch (insertErr) {
-          console.warn("[Users] Safe superadmin seed warning:", insertErr);
-        }
-      }
-
       const parseDate = (d: any): number => {
         if (!d) return Date.now();
         const time = new Date(d).getTime();
