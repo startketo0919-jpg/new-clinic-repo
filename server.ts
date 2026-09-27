@@ -2201,6 +2201,176 @@ async function checkFollowUpEligibility(
   return { isEligible: false };
 }
 
+app.post('/api/appointments/profiles-by-phone', async (req, res) => {
+  try {
+    const ip = getClientIp(req);
+    const now = Date.now();
+    if (!ipSubmissionTracker.has('profiles_' + ip)) ipSubmissionTracker.set('profiles_' + ip, []);
+    const timestamps = ipSubmissionTracker.get('profiles_' + ip)!.filter((t: number) => now - t < 900000); // 15 mins
+    if (timestamps.length >= 15) {
+      return res.status(429).json({ error: 'Too many requests. Please try again later.' });
+    }
+    timestamps.push(now);
+    ipSubmissionTracker.set('profiles_' + ip, timestamps);
+
+    const rawPhone = req.body.phone || '';
+    const cleanPhone = String(rawPhone).replace(/\D/g, '').slice(-10);
+
+    const s = await getAppointmentSettings();
+    const normalFeePaise = s.consultation_fee !== undefined && s.consultation_fee !== null ? s.consultation_fee : 19900;
+    const followUpFeePaise = s.follow_up_fee !== undefined && s.follow_up_fee !== null ? s.follow_up_fee : 0;
+    const followUpDays = s.follow_up_free_days !== undefined && s.follow_up_free_days !== null ? s.follow_up_free_days : 7;
+    const normalFee = normalFeePaise / 100;
+    const followUpFee = followUpFeePaise / 100;
+
+    if (cleanPhone.length !== 10) {
+      return res.json({ profiles: [], followUpDays, normalFee, followUpFee });
+    }
+
+    const [registryPatients]: any = await pool.query(
+      `SELECT clinic_id, full_name, phone, email, age, gender, last_visited, first_visit
+       FROM patient_registry 
+       WHERE phone = ? OR (LENGTH(phone) >= 10 AND RIGHT(phone, 10) = ?)
+       ORDER BY last_visited DESC, first_visit DESC`,
+      [cleanPhone, cleanPhone]
+    );
+
+    const [onlinePatients]: any = await pool.query(
+      `SELECT DISTINCT patient_name, phone, email, age, gender, clinic_id
+       FROM online_appointments 
+       WHERE (phone = ? OR (LENGTH(phone) >= 10 AND RIGHT(phone, 10) = ?))
+       ORDER BY created_at DESC`,
+      [cleanPhone, cleanPhone]
+    );
+
+    const profiles: any[] = [];
+    const addedNames = new Set<string>();
+
+    for (const rp of registryPatients) {
+      const nameKey = (rp.full_name || '').trim().toLowerCase();
+      if (!nameKey || addedNames.has(nameKey)) continue;
+      addedNames.add(nameKey);
+      
+      profiles.push({
+        pid: rp.clinic_id || '',
+        name: rp.full_name || '',
+        age: rp.age || null,
+        gender: rp.gender || '',
+        email: rp.email || '',
+        registryLastVisit: rp.last_visited
+      });
+    }
+
+    for (const op of onlinePatients) {
+      const nameKey = (op.patient_name || '').trim().toLowerCase();
+      if (!nameKey || addedNames.has(nameKey)) continue;
+      addedNames.add(nameKey);
+      
+      profiles.push({
+        pid: op.clinic_id || '',
+        name: op.patient_name || '',
+        age: op.age || null,
+        gender: op.gender || '',
+        email: op.email || '',
+        registryLastVisit: null
+      });
+    }
+
+    const todayStr = new Date().toISOString().split('T')[0];
+    
+    for (const p of profiles) {
+      const [recentApt]: any = await pool.query(
+        `SELECT appointment_date, updated_at, health_concern, health_concern_detail, clinic_id
+         FROM online_appointments 
+         WHERE ((phone = ? OR (LENGTH(phone) >= 10 AND RIGHT(phone, 10) = ?)) OR (clinic_id IS NOT NULL AND clinic_id != '' AND clinic_id = ?))
+         AND LOWER(TRIM(patient_name)) = LOWER(TRIM(?))
+         AND LOWER(status) = 'completed'
+         ORDER BY COALESCE(appointment_date, DATE(updated_at)) DESC, updated_at DESC LIMIT 1`,
+        [cleanPhone, cleanPhone, p.pid || '___NONE___', p.name]
+      );
+
+      let lastDate = null;
+      let lastHealthConcern = null;
+      let lastHealthConcernDetail = null;
+      let daysAgo = Infinity;
+
+      if (recentApt && recentApt.length > 0) {
+        const rDate = recentApt[0].appointment_date;
+        const uDate = recentApt[0].updated_at;
+        
+        if (rDate) {
+          lastDate = rDate instanceof Date ? rDate.toISOString().substring(0, 10) : rDate;
+        } else if (uDate) {
+          lastDate = uDate instanceof Date ? uDate.toISOString().substring(0, 10) : uDate.substring(0, 10);
+        }
+        
+        lastHealthConcern = recentApt[0].health_concern || null;
+        lastHealthConcernDetail = recentApt[0].health_concern_detail || null;
+      }
+
+      let regLastDate = p.registryLastVisit;
+      if (regLastDate instanceof Date) {
+        regLastDate = regLastDate.toISOString().substring(0, 10);
+      }
+      
+      const aptDays = lastDate ? calculateDaysAgo(lastDate) : Infinity;
+      const regDays = regLastDate ? calculateDaysAgo(regLastDate) : Infinity;
+      
+      let bestDate = null;
+      if (aptDays <= regDays && aptDays !== Infinity) {
+        bestDate = lastDate;
+        daysAgo = aptDays;
+      } else if (regDays < aptDays && regDays !== Infinity) {
+        bestDate = regLastDate;
+        daysAgo = regDays;
+      }
+
+      p.lastVisitDate = bestDate;
+      p.lastHealthConcern = lastHealthConcern;
+      p.lastHealthConcernDetail = lastHealthConcernDetail;
+      
+      p.isFollowUpEligible = daysAgo <= followUpDays;
+      p.followUpDaysRemaining = p.isFollowUpEligible ? (followUpDays - daysAgo) : 0;
+      delete p.registryLastVisit;
+
+      const [activeApt]: any = await pool.query(
+        `SELECT id, appointment_date, time_slot, health_concern, status, meet_link
+         FROM online_appointments
+         WHERE ((phone = ? OR (LENGTH(phone) >= 10 AND RIGHT(phone, 10) = ?)) OR (clinic_id IS NOT NULL AND clinic_id != '' AND clinic_id = ?))
+         AND LOWER(TRIM(patient_name)) = LOWER(TRIM(?))
+         AND status IN ('confirmed', 'rescheduled')
+         AND (appointment_date >= ? OR appointment_date IS NULL)
+         ORDER BY appointment_date ASC LIMIT 1`,
+        [cleanPhone, cleanPhone, p.pid || '___NONE___', p.name, todayStr]
+      );
+
+      if (activeApt && activeApt.length > 0) {
+        const aDate = activeApt[0].appointment_date;
+        p.activeAppointment = {
+          id: activeApt[0].id,
+          date: aDate instanceof Date ? aDate.toISOString().substring(0, 10) : aDate,
+          timeSlot: activeApt[0].time_slot,
+          healthConcern: activeApt[0].health_concern,
+          status: activeApt[0].status,
+          meetLink: activeApt[0].meet_link
+        };
+      } else {
+        p.activeAppointment = null;
+      }
+    }
+
+    return res.json({
+      profiles,
+      followUpDays,
+      normalFee,
+      followUpFee
+    });
+  } catch (error: any) {
+    console.error('Error fetching profiles by phone:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Public configuration and pricing endpoint for booking wizard
 app.get('/api/appointments/config', async (req, res) => {
   try {
