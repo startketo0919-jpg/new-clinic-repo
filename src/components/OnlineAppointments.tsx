@@ -1,13 +1,26 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Calendar, Video, Phone, Mail, Download, RefreshCw, Search, Filter, ChevronDown, ChevronUp, Check, X, Trash2, FileText, MapPin, ExternalLink, CalendarDays, List, IndianRupee } from 'lucide-react';
+import { Calendar, Video, Phone, Mail, Download, RefreshCw, Search, Filter, ChevronDown, ChevronUp, Check, X, Trash2, FileText, MapPin, ExternalLink, CalendarDays, List, IndianRupee, Eye, Truck } from 'lucide-react';
 import { format, startOfMonth, endOfMonth, startOfWeek, endOfWeek, eachDayOfInterval, isSameMonth, isSameDay, isToday, addMonths, subMonths, parseISO } from 'date-fns';
 import { cn } from '../lib/utils';
 import { getLocalTodayString } from '../lib/dateUtils';
 
-interface OnlineAppointment {
+export interface AppointmentFile {
+  id: string;
+  name: string;
+  mimeType?: string;
+  sizeBytes?: number;
+  url: string;
+  downloadUrl: string;
+  uploadedAt?: string;
+}
+
+export interface OnlineAppointment {
   id: string;
   patientName: string;
+  age?: number | string;
+  gender?: string;
   phone: string;
+  email: string;
   clinicId?: string;
   date: string; // ISO string
   time: string;
@@ -16,18 +29,31 @@ interface OnlineAppointment {
   amount: number;
   meetLink?: string;
   status: 'Confirmed' | 'Rescheduled' | 'Completed' | 'Cancelled' | 'Pending_slot';
-  files: Array<{ name: string; url: string }>;
+  files: AppointmentFile[];
   courierRequested: boolean;
   courierInfo?: {
     address: string;
     pincode: string;
     contact: string;
   };
+  patientType?: string;
+  shortAddress?: string;
+  lastVisitDate?: string;
   rescheduleCount: number;
   createdAt: string;
 }
 
-export default function OnlineAppointments({ userRole }: { userRole?: string | null }) {
+interface OnlineAppointmentsProps {
+  userRole?: string | null;
+  onAutofillDelhivery?: (data: {
+    consigneeName: string;
+    consigneePhone: string;
+    consigneeAddress: string;
+    consigneePincode: string;
+  }) => void;
+}
+
+export default function OnlineAppointments({ userRole, onAutofillDelhivery }: OnlineAppointmentsProps) {
   const [appointments, setAppointments] = useState<OnlineAppointment[]>([]);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'table' | 'calendar'>('table');
@@ -99,6 +125,91 @@ export default function OnlineAppointments({ userRole }: { userRole?: string | n
     }
   };
 
+  // File Preview Modal State
+  const [previewFile, setPreviewFile] = useState<{
+    id: string;
+    name: string;
+    url: string;
+    downloadUrl: string;
+    isPdf: boolean;
+    isImage: boolean;
+  } | null>(null);
+
+  const handleViewFile = (file: AppointmentFile) => {
+    const token = sessionStorage.getItem('staffAuthToken') || '';
+    const fileUrl = `${file.url}?token=${encodeURIComponent(token)}`;
+    const downloadUrl = `${file.downloadUrl}?token=${encodeURIComponent(token)}`;
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    const isPdf = ext === 'pdf' || file.mimeType === 'application/pdf';
+    const isImage = ['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext) || (file.mimeType?.startsWith('image/') ?? false);
+
+    setPreviewFile({
+      id: file.id,
+      name: file.name,
+      url: fileUrl,
+      downloadUrl,
+      isPdf,
+      isImage
+    });
+  };
+
+  const handleDownloadFile = (file: AppointmentFile) => {
+    const token = sessionStorage.getItem('staffAuthToken') || '';
+    const downloadUrl = `${file.downloadUrl}?token=${encodeURIComponent(token)}`;
+    const a = document.createElement('a');
+    a.href = downloadUrl;
+    a.download = file.name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
+
+  const handleDeleteFile = async (appointmentId: string, fileId: string, fileName: string) => {
+    if (!window.confirm(`Are you sure you want to delete "${fileName}"? This cannot be undone.`)) {
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/appointments/files/${fileId}`, {
+        method: 'DELETE'
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to delete file');
+      }
+
+      setAppointments(prev => prev.map(a => {
+        if (a.id === appointmentId) {
+          return {
+            ...a,
+            files: a.files.filter(f => f.id !== fileId)
+          };
+        }
+        return a;
+      }));
+    } catch (err: any) {
+      alert('Error deleting file: ' + err.message);
+    }
+  };
+
+  const handleSendViaDelhivery = (app: OnlineAppointment) => {
+    if (!onAutofillDelhivery) {
+      alert('Delhivery courier dispatcher is not connected.');
+      return;
+    }
+    const name = app.patientName || '';
+    const phone = app.courierInfo?.contact || app.phone || '';
+    const address = app.courierInfo?.address || app.shortAddress || '';
+    const pincode = app.courierInfo?.pincode || '';
+
+    onAutofillDelhivery({
+      consigneeName: name,
+      consigneePhone: phone,
+      consigneeAddress: address,
+      consigneePincode: pincode
+    });
+  };
+
   const fetchAppointments = async () => {
     setLoading(true);
     try {
@@ -109,7 +220,10 @@ export default function OnlineAppointments({ userRole }: { userRole?: string | n
         const mapped: OnlineAppointment[] = rawList.map(a => ({
           id: a.id,
           patientName: a.patient_name || a.patientName,
+          age: a.age,
+          gender: a.gender,
           phone: a.phone,
+          email: a.email || '',
           clinicId: a.clinic_id || a.clinicId,
           date: a.appointment_date || a.date || '',
           time: a.time_slot || a.time || '',
@@ -126,13 +240,24 @@ export default function OnlineAppointments({ userRole }: { userRole?: string | n
           amount: a.payment_amount ? a.payment_amount / 100 : 0,
           meetLink: a.meet_link || a.meetLink,
           status: (a.status ? a.status.charAt(0).toUpperCase() + a.status.slice(1) : 'Confirmed') as any,
-          files: a.files || [],
+          files: (a.files || []).map((f: any) => ({
+            id: f.id,
+            name: f.name || f.original_name,
+            mimeType: f.mimeType || f.mime_type,
+            sizeBytes: f.sizeBytes || f.size_bytes,
+            url: f.url || `/api/appointments/files/view/${f.id}`,
+            downloadUrl: f.downloadUrl || `/api/appointments/files/download/${f.id}`,
+            uploadedAt: f.uploadedAt || f.uploaded_at
+          })),
           courierRequested: !!a.wants_courier_medicine,
           courierInfo: a.wants_courier_medicine ? {
             address: a.courier_address || '',
             pincode: a.courier_pincode || '',
             contact: a.courier_contact || ''
           } : undefined,
+          patientType: a.patient_type || '',
+          shortAddress: a.short_address || '',
+          lastVisitDate: a.last_visit_date || '',
           rescheduleCount: a.reschedule_count || 0,
           createdAt: a.created_at || a.createdAt || ''
         }));
@@ -483,48 +608,143 @@ export default function OnlineAppointments({ userRole }: { userRole?: string | n
                               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                                 <div>
                                   <h4 className="text-xs font-bold text-slate-500 uppercase mb-2">Details</h4>
-                                  <div className="text-sm text-slate-700 space-y-1">
+                                  <div className="text-sm text-slate-700 space-y-1.5">
                                     <p><b>Created:</b> {app.createdAt ? (() => {
                                       try { return format(new Date(app.createdAt), 'MMM d, yyyy h:mm a'); }
                                       catch { return String(app.createdAt); }
                                     })() : 'N/A'}</p>
                                     <p><b>Rescheduled:</b> {app.rescheduleCount} time(s)</p>
-                                    <p><b>Email:</b> {app.patientName.replace(/\s+/g, '').toLowerCase()}@example.com</p>
+                                    <p><b>Email:</b> <span className="font-medium text-slate-900">{app.email || 'N/A'}</span></p>
+                                    {app.age && <p><b>Age / Gender:</b> {app.age} yrs {app.gender ? `/ ${app.gender}` : ''}</p>}
+                                    {app.clinicId && <p><b>Patient ID:</b> <span className="font-mono font-semibold text-slate-800">{app.clinicId}</span></p>}
                                   </div>
+
+                                  {/* Offline Clinic Records Section (Request 2) */}
+                                  {(app.shortAddress || app.lastVisitDate) ? (
+                                    <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-900">
+                                      <div className="font-bold flex items-center gap-1.5 mb-1.5 text-blue-800">
+                                        <MapPin className="w-3.5 h-3.5 text-blue-600" /> Offline Clinic Record Info
+                                      </div>
+                                      {app.shortAddress && (
+                                        <p className="mb-1"><b>Short Address:</b> <span className="font-medium text-slate-900">{app.shortAddress}</span></p>
+                                      )}
+                                      {app.lastVisitDate && (
+                                        <p><b>Last Offline Visit:</b> <span className="font-medium text-slate-900">{app.lastVisitDate}</span></p>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <div className="mt-2 text-xs text-slate-400 italic">
+                                      No offline clinic records noted
+                                    </div>
+                                  )}
+
+                                  {/* Send via Delhivery (if courier was not explicitly requested, can still dispatch from here) */}
+                                  {!app.courierRequested && onAutofillDelhivery && (
+                                    <div className="mt-3 pt-2 border-t border-slate-200">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleSendViaDelhivery(app)}
+                                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-teal-50 hover:bg-teal-100 text-teal-800 text-xs font-semibold rounded-lg border border-teal-200 transition-colors shadow-xs"
+                                        title="Prefill patient details into Delhivery New Order"
+                                      >
+                                        <Truck className="w-3.5 h-3.5 text-teal-600" /> Send via Delhivery
+                                      </button>
+                                    </div>
+                                  )}
                                 </div>
                                 
-                                {app.files.length > 0 && (
-                                  <div>
-                                    <h4 className="text-xs font-bold text-slate-500 uppercase mb-2">Uploaded Files</h4>
+                                {/* Uploaded Files Section (Request 4) */}
+                                <div className="lg:col-span-1">
+                                  <h4 className="text-xs font-bold text-slate-500 uppercase mb-2 flex items-center justify-between">
+                                    <span>Uploaded Files ({app.files.length})</span>
+                                  </h4>
+                                  {app.files.length === 0 ? (
+                                    <p className="text-xs text-slate-400 italic bg-white p-3 rounded-lg border border-slate-200">
+                                      No reports or files uploaded.
+                                    </p>
+                                  ) : (
                                     <div className="space-y-2">
-                                      {app.files.map((f, i) => (
-                                        <a 
-                                          key={i} 
-                                          href={f.url} 
-                                          target="_blank" 
-                                          rel="noopener noreferrer"
-                                          className="flex items-center justify-between p-2 rounded border border-slate-200 bg-white hover:border-indigo-300 transition-colors group"
+                                      {app.files.map((file) => (
+                                        <div 
+                                          key={file.id} 
+                                          className="flex items-center justify-between p-2.5 rounded-lg border border-slate-200 bg-white hover:border-teal-300 transition-colors shadow-xs"
                                         >
-                                          <div className="flex items-center gap-2 text-sm text-slate-600 truncate">
-                                            <FileText className="w-4 h-4 text-indigo-500 flex-shrink-0" />
-                                            <span className="truncate">{f.name}</span>
+                                          <div className="flex items-center gap-2 min-w-0 flex-1 mr-2">
+                                            <div className="p-1 bg-teal-50 text-teal-600 rounded flex-shrink-0">
+                                              <FileText className="w-4 h-4 text-teal-600" />
+                                            </div>
+                                            <div className="min-w-0 flex-1">
+                                              <p className="text-xs font-semibold text-slate-800 truncate" title={file.name}>
+                                                {file.name}
+                                              </p>
+                                              {file.sizeBytes && (
+                                                <p className="text-[10px] text-slate-400">
+                                                  {(file.sizeBytes / 1024).toFixed(1)} KB
+                                                </p>
+                                              )}
+                                            </div>
                                           </div>
-                                          <Download className="w-3 h-3 text-slate-400 group-hover:text-indigo-600" />
-                                        </a>
+
+                                          <div className="flex items-center gap-1 flex-shrink-0">
+                                            {/* VIEW */}
+                                            <button
+                                              type="button"
+                                              onClick={() => handleViewFile(file)}
+                                              className="p-1 text-teal-700 hover:bg-teal-50 rounded transition-colors"
+                                              title="View file"
+                                            >
+                                              <Eye className="w-3.5 h-3.5" />
+                                            </button>
+
+                                            {/* DOWNLOAD */}
+                                            <button
+                                              type="button"
+                                              onClick={() => handleDownloadFile(file)}
+                                              className="p-1 text-slate-600 hover:text-teal-700 hover:bg-slate-100 rounded transition-colors"
+                                              title="Download file"
+                                            >
+                                              <Download className="w-3.5 h-3.5" />
+                                            </button>
+
+                                            {/* DELETE */}
+                                            <button
+                                              type="button"
+                                              onClick={() => handleDeleteFile(app.id, file.id, file.name)}
+                                              className="p-1 text-rose-500 hover:bg-rose-50 rounded transition-colors"
+                                              title="Delete file"
+                                            >
+                                              <Trash2 className="w-3.5 h-3.5" />
+                                            </button>
+                                          </div>
+                                        </div>
                                       ))}
                                     </div>
-                                  </div>
-                                )}
+                                  )}
+                                </div>
 
                                 {app.courierRequested && app.courierInfo && (
                                   <div className="lg:col-span-2">
                                     <h4 className="text-xs font-bold text-slate-500 uppercase mb-2 flex items-center gap-1">
-                                      <MapPin className="w-3.5 h-3.5" /> Medicine Courier Requested
+                                      <MapPin className="w-3.5 h-3.5 text-amber-600" /> Medicine Courier Requested
                                     </h4>
-                                    <div className="bg-amber-50 border border-amber-100 rounded-lg p-3 text-sm text-slate-700">
-                                      <p><b>Address:</b> {app.courierInfo.address}</p>
-                                      <p className="mt-1"><b>Pincode:</b> {app.courierInfo.pincode}</p>
-                                      <p className="mt-1"><b>Contact:</b> {app.courierInfo.contact}</p>
+                                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5 text-sm text-slate-700 space-y-1">
+                                      <p><b>Address:</b> <span className="font-medium text-slate-900">{app.courierInfo.address}</span></p>
+                                      <p><b>Pincode:</b> <span className="font-mono font-medium text-slate-900">{app.courierInfo.pincode}</span></p>
+                                      <p><b>Contact:</b> <span className="font-medium text-slate-900">{app.courierInfo.contact}</span></p>
+                                      
+                                      {/* Send via Delhivery (Request 3) */}
+                                      {onAutofillDelhivery && (
+                                        <div className="mt-3 pt-2.5 border-t border-amber-200/70 flex items-center justify-between">
+                                          <span className="text-xs text-amber-900 font-medium">Ready to dispatch package?</span>
+                                          <button
+                                            type="button"
+                                            onClick={() => handleSendViaDelhivery(app)}
+                                            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold rounded-lg shadow-sm transition-all"
+                                          >
+                                            <Truck className="w-3.5 h-3.5" /> Send via Delhivery
+                                          </button>
+                                        </div>
+                                      )}
                                     </div>
                                   </div>
                                 )}
@@ -731,6 +951,76 @@ export default function OnlineAppointments({ userRole }: { userRole?: string | n
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* File Preview Modal */}
+      {previewFile && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-4xl w-full max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            {/* Modal Header */}
+            <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+              <div className="flex items-center gap-2 truncate mr-4">
+                <FileText className="w-5 h-5 text-teal-600 flex-shrink-0" />
+                <h3 className="font-semibold text-slate-800 truncate" title={previewFile.name}>
+                  {previewFile.name}
+                </h3>
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <a
+                  href={previewFile.downloadUrl}
+                  download={previewFile.name}
+                  className="px-3 py-1.5 bg-teal-50 hover:bg-teal-100 text-teal-700 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-colors"
+                >
+                  <Download className="w-3.5 h-3.5" /> Download
+                </a>
+                <a
+                  href={previewFile.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-colors"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" /> Open Tab
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setPreviewFile(null)}
+                  className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-200 rounded-lg transition-colors ml-1"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Body */}
+            <div className="flex-1 p-4 overflow-auto bg-slate-100 flex items-center justify-center min-h-[350px]">
+              {previewFile.isImage ? (
+                <img
+                  src={previewFile.url}
+                  alt={previewFile.name}
+                  className="max-h-[75vh] max-w-full object-contain rounded-lg shadow-sm mx-auto"
+                />
+              ) : previewFile.isPdf ? (
+                <iframe
+                  src={previewFile.url}
+                  title={previewFile.name}
+                  className="w-full h-[75vh] rounded-lg border border-slate-200 bg-white"
+                />
+              ) : (
+                <div className="text-center p-8 bg-white rounded-xl border border-slate-200">
+                  <FileText className="w-16 h-16 text-slate-400 mx-auto mb-3" />
+                  <p className="text-sm font-semibold text-slate-700 mb-1">{previewFile.name}</p>
+                  <p className="text-xs text-slate-500 mb-4">Preview not available for this file type</p>
+                  <a
+                    href={previewFile.downloadUrl}
+                    className="inline-flex items-center gap-2 px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold rounded-lg shadow-sm"
+                  >
+                    <Download className="w-4 h-4" /> Download to View
+                  </a>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}

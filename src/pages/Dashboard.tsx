@@ -204,7 +204,7 @@ export default function Dashboard() {
 
         {activeTab === 'online-appointments' && (
           <div className="lg:col-span-12">
-            <OnlineAppointments userRole={userRole} />
+            <OnlineAppointments userRole={userRole} onAutofillDelhivery={handleAutofillDelhivery} />
           </div>
         )}
 

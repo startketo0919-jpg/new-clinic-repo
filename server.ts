@@ -2901,6 +2901,65 @@ app.get('/api/appointments/files/:appointmentId', requireStaffAuth, async (req: 
   }
 });
 
+// View single file inline (staff only)
+app.get('/api/appointments/files/view/:fileId', requireStaffAuth, async (req: AuthRequest, res) => {
+  try {
+    const { fileId } = req.params;
+    const [files]: any = await pool.query('SELECT * FROM appointment_files WHERE id = ?', [fileId]);
+    if (files.length === 0) return res.status(404).json({ error: 'File not found' });
+    const file = files[0];
+    if (!file.stored_path || !fs.existsSync(file.stored_path)) {
+      return res.status(404).json({ error: 'File not found on disk' });
+    }
+
+    res.setHeader('Content-Type', file.mime_type || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(file.original_name)}"`);
+    fs.createReadStream(file.stored_path).pipe(res);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Download single file (staff only)
+app.get('/api/appointments/files/download/:fileId', requireStaffAuth, async (req: AuthRequest, res) => {
+  try {
+    const { fileId } = req.params;
+    const [files]: any = await pool.query('SELECT * FROM appointment_files WHERE id = ?', [fileId]);
+    if (files.length === 0) return res.status(404).json({ error: 'File not found' });
+    const file = files[0];
+    if (!file.stored_path || !fs.existsSync(file.stored_path)) {
+      return res.status(404).json({ error: 'File not found on disk' });
+    }
+
+    res.download(file.stored_path, file.original_name);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete single file (staff only)
+app.delete('/api/appointments/files/:fileId', requireStaffAuth, async (req: AuthRequest, res) => {
+  try {
+    const { fileId } = req.params;
+    const [files]: any = await pool.query('SELECT * FROM appointment_files WHERE id = ?', [fileId]);
+    if (files.length === 0) return res.status(404).json({ error: 'File not found' });
+    const file = files[0];
+
+    if (file.stored_path && fs.existsSync(file.stored_path)) {
+      try {
+        fs.unlinkSync(file.stored_path);
+      } catch (unlinkErr) {
+        console.error('Error removing file from disk:', unlinkErr);
+      }
+    }
+
+    await pool.query('DELETE FROM appointment_files WHERE id = ?', [fileId]);
+    res.json({ success: true, message: 'File deleted successfully' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Serve uploaded files (staff only)
 app.use('/uploads/reports', requireStaffAuth, express.static(path.join(process.cwd(), 'uploads', 'reports')));
 
@@ -3176,10 +3235,22 @@ app.get('/api/online-appointments', requireStaffAuth, async (req: AuthRequest, r
     
     const [rows]: any = await pool.query(query, params);
     
-    // Attach file counts
+    // Attach files for each appointment
     for (const row of rows) {
-      const [files]: any = await pool.query('SELECT COUNT(*) as count FROM appointment_files WHERE appointment_id = ?', [row.id]);
-      row.fileCount = files[0]?.count || 0;
+      const [files]: any = await pool.query(
+        'SELECT id, original_name, stored_path, mime_type, size_bytes, uploaded_at FROM appointment_files WHERE appointment_id = ? ORDER BY uploaded_at ASC',
+        [row.id]
+      );
+      row.fileCount = files.length;
+      row.files = files.map((f: any) => ({
+        id: f.id,
+        name: f.original_name,
+        mimeType: f.mime_type,
+        sizeBytes: f.size_bytes,
+        url: `/api/appointments/files/view/${f.id}`,
+        downloadUrl: `/api/appointments/files/download/${f.id}`,
+        uploadedAt: f.uploaded_at
+      }));
     }
     
     res.json({ appointments: rows });
