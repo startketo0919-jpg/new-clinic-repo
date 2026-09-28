@@ -25,7 +25,7 @@ import {
   apiAntiAbuseLimiter 
 } from "./src/middleware/security.js";
 
-import { getGoogleAuthUrl, exchangeCodeForTokens, refreshAccessToken, createMeetEvent, deleteMeetEvent, updateMeetEvent } from './src/services/google-meet.js';
+import { getGoogleAuthUrl, exchangeCodeForTokens, refreshAccessToken, createMeetEvent, deleteMeetEvent, updateMeetEvent, revokeGoogleToken } from './src/services/google-meet.js';
 import { buildAppointmentConfirmationEmail, buildAppointmentRescheduleEmail, buildStaffNotificationEmail, buildReminderEmail, buildRefundEmail, buildRescheduleOtpEmail } from './src/services/email-templates.js';
 import crypto from 'crypto';
 import fs from 'fs';
@@ -1860,7 +1860,8 @@ app.get('/api/google/auth', requireAdminAuth, async (req: AuthRequest, res) => {
     const s = settingsRows[0];
     const clientId = s?.google_oauth_client_id || '715658585090-ijo4cn4qf0erak1jl2fucdstllqieosh.apps.googleusercontent.com';
     const redirectUri = getPublicRedirectUri(req);
-    const url = getGoogleAuthUrl(clientId, redirectUri);
+    const selectAccount = req.query.select_account !== 'false';
+    const url = getGoogleAuthUrl(clientId, redirectUri, selectAccount);
     res.redirect(url);
   } catch (err: any) {
     console.error('[Google Auth] Error:', err);
@@ -1906,6 +1907,36 @@ app.get('/api/google/status', requireAdminAuth, async (req: AuthRequest, res) =>
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Google OAuth - Disconnect
+app.post('/api/google/disconnect', requireAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const [settingsRows]: any = await pool.query('SELECT google_oauth_refresh_token, google_oauth_access_token, google_oauth_client_id, google_oauth_client_secret FROM settings WHERE id = ?', ['default']);
+    const s = settingsRows[0];
+
+    const token = s?.google_oauth_refresh_token || s?.google_oauth_access_token;
+    const clientId = s?.google_oauth_client_id || '715658585090-ijo4cn4qf0erak1jl2fucdstllqieosh.apps.googleusercontent.com';
+    const clientSecret = s?.google_oauth_client_secret || '';
+
+    if (token) {
+      await revokeGoogleToken(clientId, clientSecret, token);
+    }
+
+    await pool.query(
+      `UPDATE settings SET 
+        google_oauth_refresh_token = NULL, 
+        google_oauth_access_token = NULL, 
+        google_oauth_token_expiry = NULL, 
+        google_calendar_email = NULL 
+      WHERE id = 'default'`
+    );
+
+    res.json({ success: true, message: 'Google Meet integration disconnected successfully' });
+  } catch (err: any) {
+    console.error('[Google Disconnect] Error:', err);
+    res.status(500).json({ error: 'Failed to disconnect Google Meet: ' + (err.message || 'Unknown error') });
   }
 });
 

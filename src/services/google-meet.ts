@@ -1,10 +1,10 @@
 import { google } from 'googleapis';
 
-export function getGoogleAuthUrl(clientId: string, redirectUri: string): string {
+export function getGoogleAuthUrl(clientId: string, redirectUri: string, selectAccount: boolean = true): string {
     const oauth2Client = new google.auth.OAuth2(clientId, '', redirectUri);
     return oauth2Client.generateAuthUrl({
         access_type: 'offline',
-        prompt: 'consent',
+        prompt: selectAccount ? 'select_account consent' : 'consent',
         scope: [
             'https://www.googleapis.com/auth/calendar.events',
             'https://www.googleapis.com/auth/userinfo.email'
@@ -186,5 +186,14 @@ export async function updateMeetEvent(params: MeetEventParams & { eventId: strin
     } catch (error) {
         console.error('[GoogleMeet] Error in updateMeetEvent:', error);
         throw error;
+    }
+}
+
+export async function revokeGoogleToken(clientId: string, clientSecret: string, token: string): Promise<void> {
+    try {
+        const oauth2Client = new google.auth.OAuth2(clientId, clientSecret);
+        await oauth2Client.revokeToken(token);
+    } catch (error) {
+        console.warn('[GoogleMeet] Token revocation failed (token may already be expired or revoked):', error);
     }
 }

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useClinic } from '../context/ClinicContext';
 import { useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Save, Plus, Trash2, ShieldAlert, Send, Package, CreditCard, Video, Bell, CheckCircle2, XCircle, IndianRupee } from 'lucide-react';
+import { LayoutDashboard, Save, Plus, Trash2, ShieldAlert, Send, Package, CreditCard, Video, Bell, CheckCircle2, XCircle, IndianRupee, RefreshCw } from 'lucide-react';
 import { WhatsAppTemplate } from '../types';
 
 export default function SettingsPage() {
@@ -23,6 +23,34 @@ export default function SettingsPage() {
   const [googleConnected, setGoogleConnected] = useState(false);
   const [googleEmail, setGoogleEmail] = useState('');
   const [googleStatusChecked, setGoogleStatusChecked] = useState(false);
+  const [disconnectingGoogle, setDisconnectingGoogle] = useState(false);
+
+  const handleDisconnectGoogle = async () => {
+    if (!window.confirm('Are you sure you want to disconnect this Google Meet account? Future online consultations will not be able to generate Google Meet links until an account is reconnected.')) {
+      return;
+    }
+    setDisconnectingGoogle(true);
+    try {
+      const res = await fetch('/api/google/disconnect', { method: 'POST' });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setGoogleConnected(false);
+        setGoogleEmail('');
+        alert('Google Meet account disconnected successfully.');
+      } else {
+        alert(data.error || 'Failed to disconnect Google account.');
+      }
+    } catch (err: any) {
+      alert('Error disconnecting Google account: ' + err.message);
+    } finally {
+      setDisconnectingGoogle(false);
+    }
+  };
+
+  const handleConnectOrChangeGoogle = () => {
+    const token = sessionStorage.getItem('staffAuthToken') || '';
+    window.location.href = `/api/google/auth?token=${encodeURIComponent(token)}&select_account=true`;
+  };
 
   // Auth check and Google status
   useEffect(() => {
@@ -44,6 +72,9 @@ export default function SettingsPage() {
     const urlParams = new URLSearchParams(window.location.search);
     if (urlParams.get('google') === 'connected') {
       alert('Google Account Connected Successfully!');
+      window.history.replaceState({}, '', '/settings');
+    } else if (urlParams.get('google') === 'error') {
+      alert('Google Connection Error: ' + (urlParams.get('message') || 'Failed to connect.'));
       window.history.replaceState({}, '', '/settings');
     }
   }, [navigate]);
@@ -703,7 +734,7 @@ export default function SettingsPage() {
               </h3>
               
               <div className="space-y-6">
-                <div className="bg-slate-50 p-6 rounded-xl border border-slate-100 flex items-center justify-between">
+                <div className="bg-slate-50 p-6 rounded-xl border border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                   <div>
                     <h4 className="font-semibold text-slate-800 mb-1">Connection Status</h4>
                     {googleStatusChecked ? (
@@ -722,15 +753,30 @@ export default function SettingsPage() {
                       <div className="text-sm text-slate-500">Checking status...</div>
                     )}
                   </div>
-                  <div>
+                  <div className="flex flex-wrap items-center gap-3">
                     {googleConnected ? (
-                      <button onClick={() => { /* Implement disconnect if needed */ alert('Please disconnect from Google Account settings.'); }} className="px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors">Disconnect</button>
+                      <>
+                        <button 
+                          type="button"
+                          onClick={handleConnectOrChangeGoogle}
+                          className="px-4 py-2 bg-indigo-50 border border-indigo-200 text-indigo-700 rounded-lg text-sm font-medium hover:bg-indigo-100 transition-colors flex items-center gap-2 shadow-sm"
+                        >
+                          <RefreshCw className="w-4 h-4" />
+                          Change Connected Account
+                        </button>
+                        <button 
+                          type="button"
+                          disabled={disconnectingGoogle}
+                          onClick={handleDisconnectGoogle}
+                          className="px-4 py-2 bg-white border border-rose-300 text-rose-600 rounded-lg text-sm font-medium hover:bg-rose-50 transition-colors disabled:opacity-50"
+                        >
+                          {disconnectingGoogle ? 'Disconnecting...' : 'Disconnect'}
+                        </button>
+                      </>
                     ) : (
                       <button 
-                        onClick={() => { 
-                          const token = sessionStorage.getItem('staffAuthToken') || '';
-                          window.location.href = `/api/google/auth?token=${encodeURIComponent(token)}`; 
-                        }} 
+                        type="button"
+                        onClick={handleConnectOrChangeGoogle} 
                         className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
                       >
                         Connect Google Account
