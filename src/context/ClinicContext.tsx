@@ -437,7 +437,9 @@ export function ClinicProvider({ children }: { children: React.ReactNode }) {
         heading: `Hey ${app.fullName},`,
         body: `Your appointment has been successfully scheduled for ${dateStr}.`,
         highlight: dateStr,
-        footer: []
+        footer: [
+          { title: 'Follow-up Window', desc: '7 Days follow-up consultation window applies to registered consultations.' }
+        ]
       });
     }
     
@@ -501,7 +503,9 @@ export function ClinicProvider({ children }: { children: React.ReactNode }) {
         heading: `Hey ${app.fullName},`,
         body: `Your appointment for ${dateStr} has been approved and you have been added to the queue for that day.`,
         highlight: dateStr,
-        footer: []
+        footer: [
+          { title: 'Follow-up Window', desc: '7 Days follow-up consultation window applies to registered consultations.' }
+        ]
       });
     }
   };

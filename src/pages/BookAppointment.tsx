@@ -124,7 +124,7 @@ export default function BookAppointment() {
   }>({
     normalFee: 199,
     followUpFee: 0,
-    followUpDays: 15,
+    followUpDays: 7,
   });
 
   // Step 4: Slots
@@ -222,7 +222,7 @@ export default function BookAppointment() {
         setPricingConfig({
           normalFee: data.normalFee ?? 199,
           followUpFee: data.followUpFee ?? 0,
-          followUpDays: data.followUpDays ?? 15,
+          followUpDays: data.followUpDays ?? 7,
         });
       }
     } catch (e) {

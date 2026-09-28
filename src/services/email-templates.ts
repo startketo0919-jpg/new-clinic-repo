@@ -61,7 +61,7 @@ export function buildAppointmentConfirmationEmail(data: { patientName: string, a
         <!-- Footer -->
         <div style="background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 20px; text-align: center; color: #64748b; font-size: 13px; line-height: 1.6;">
             <p style="margin: 0 0 5px 0;">Krishna Homoeopathic Clinic &bull; +91 94562 18066 &bull; contact@drsunilkumarbhms.in</p>
-            <p style="margin: 0;">Follow-up consultation window applies to registered consultations.</p>
+            <p style="margin: 0;">7 Days follow-up consultation window applies to registered consultations.</p>
         </div>
     </div>
 </body>
@@ -118,7 +118,7 @@ export function buildAppointmentRescheduleEmail(data: { patientName: string, app
         <!-- Footer -->
         <div style="background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 20px; text-align: center; color: #64748b; font-size: 13px; line-height: 1.6;">
             <p style="margin: 0 0 5px 0;">Krishna Homoeopathic Clinic &bull; +91 94562 18066 &bull; contact@drsunilkumarbhms.in</p>
-            <p style="margin: 0;">Follow-up consultation window applies to registered consultations.</p>
+            <p style="margin: 0;">7 Days follow-up consultation window applies to registered consultations.</p>
         </div>
     </div>
 </body>
@@ -203,8 +203,9 @@ export function buildStaffNotificationEmail(data: { patientName: string, phone: 
         </div>
 
         <!-- Footer -->
-        <div style="background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 15px; text-align: center; color: #94a3b8; font-size: 12px;">
-            System Notification - Krishna Homoeopathic Clinic
+        <div style="background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 15px; text-align: center; color: #94a3b8; font-size: 12px; line-height: 1.5;">
+            <p style="margin: 0 0 3px 0;">System Notification &bull; Krishna Homoeopathic Clinic</p>
+            <p style="margin: 0; color: #64748b;">7 Days follow-up consultation window applies to registered consultations.</p>
         </div>
     </div>
 </body>
@@ -253,7 +254,7 @@ export function buildReminderEmail(data: { patientName: string, appointmentId: s
         <!-- Footer -->
         <div style="background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 20px; text-align: center; color: #64748b; font-size: 13px; line-height: 1.6;">
             <p style="margin: 0 0 5px 0;">Krishna Homoeopathic Clinic &bull; +91 94562 18066 &bull; contact@drsunilkumarbhms.in</p>
-            <p style="margin: 0;">Follow-up consultation window applies to registered consultations.</p>
+            <p style="margin: 0;">7 Days follow-up consultation window applies to registered consultations.</p>
         </div>
     </div>
 </body>
@@ -303,7 +304,7 @@ export function buildRefundEmail(data: { patientName: string, appointmentId: str
         <!-- Footer -->
         <div style="background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 20px; text-align: center; color: #64748b; font-size: 13px; line-height: 1.6;">
             <p style="margin: 0 0 5px 0;">Krishna Homoeopathic Clinic &bull; +91 94562 18066 &bull; contact@drsunilkumarbhms.in</p>
-            <p style="margin: 0;">Follow-up consultation window applies to registered consultations.</p>
+            <p style="margin: 0;">7 Days follow-up consultation window applies to registered consultations.</p>
         </div>
     </div>
 </body>
@@ -346,7 +347,7 @@ export function buildRescheduleOtpEmail(data: { patientName: string, otp: string
         <!-- Footer -->
         <div style="background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 20px; text-align: center; color: #64748b; font-size: 13px; line-height: 1.6;">
             <p style="margin: 0 0 5px 0;">Krishna Homoeopathic Clinic &bull; +91 94562 18066 &bull; contact@drsunilkumarbhms.in</p>
-            <p style="margin: 0;">Follow-up consultation window applies to registered consultations.</p>
+            <p style="margin: 0;">7 Days follow-up consultation window applies to registered consultations.</p>
         </div>
     </div>
 </body>
