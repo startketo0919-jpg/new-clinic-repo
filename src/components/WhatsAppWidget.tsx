@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { MessageCircle, X, Send, User, Paperclip } from 'lucide-react';
+import { MessageCircle, X, Send, User } from 'lucide-react';
 import { useClinic } from '../context/ClinicContext';
 import { cn } from '../lib/utils';
 import { format } from 'date-fns';

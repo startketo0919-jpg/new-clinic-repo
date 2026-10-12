@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Package, Truck, FileText, Search, Plus, Trash2, CheckCircle2, History as HistoryIcon, Download, XCircle, Copy, AlertCircle, Calendar, Clock, ChevronDown, ChevronUp, RefreshCw, MessageSquare, Phone, MapPin, ExternalLink, Send, Crop, Printer } from 'lucide-react';
+import { Package, Truck, FileText, Search, Plus, Trash2, CheckCircle2, Download, XCircle, Copy, AlertCircle, Clock, ChevronDown, ChevronUp, RefreshCw, MessageSquare, Phone, Send, Crop, Printer } from 'lucide-react';
 import { useClinic } from '../context/ClinicContext';
 import LabelCropModal from './LabelCropModal';
 

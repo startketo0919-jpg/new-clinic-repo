@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Package, Send, CheckCircle2, ShieldCheck, Phone, Mail, MapPin, Building, AlertCircle, Sparkles } from 'lucide-react';
+import { Package, Send, CheckCircle2, ShieldCheck, Phone, Building, AlertCircle } from 'lucide-react';
 
 export default function PatientShipmentForm() {
   const [patientName, setPatientName] = useState('');

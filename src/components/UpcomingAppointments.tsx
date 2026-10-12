@@ -1,6 +1,6 @@
 import React from 'react';
 import { useClinic } from '../context/ClinicContext';
-import { Calendar, User, Phone, XCircle, CheckCircle } from 'lucide-react';
+import { Calendar, Phone, XCircle, CheckCircle } from 'lucide-react';
 import { format } from 'date-fns';
 
 import { getLocalTodayString } from '../lib/dateUtils';

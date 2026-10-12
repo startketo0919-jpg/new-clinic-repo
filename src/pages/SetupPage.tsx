@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { ShieldCheck, Lock, Mail, ArrowRight, CheckCircle2, Server, MessageSquare, Truck, Users, RefreshCw } from 'lucide-react';
+import { ShieldCheck, Lock, Mail, ArrowRight, Server, MessageSquare, Truck, Users, RefreshCw } from 'lucide-react';
 
 export default function SetupPage() {
   const navigate = useNavigate();

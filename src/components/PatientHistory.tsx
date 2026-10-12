@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useClinic } from '../context/ClinicContext';
-import { Search, Calendar, UserMinus, FileText, Filter, List } from 'lucide-react';
+import { Search, Calendar, UserMinus, FileText, List } from 'lucide-react';
 import { format } from 'date-fns';
 import { cn } from '../lib/utils';
 

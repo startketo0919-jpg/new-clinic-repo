@@ -4,11 +4,11 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Stethoscope, User, Calendar, CreditCard, CheckCircle2, 
   Upload, X, ChevronRight, ChevronLeft, Video, 
-  Phone, History, FileText, MapPin, Truck, IndianRupee,
-  CalendarDays, Clock, Download, ExternalLink, RefreshCw, AlertCircle,
-  Lock, Sparkles, UserPlus, Users, Search
+  Phone, FileText, Truck, IndianRupee,
+  CalendarDays, Clock, Download, RefreshCw, AlertCircle,
+  Lock, Sparkles, UserPlus, Users
 } from 'lucide-react';
-import { format, addDays, isBefore, isSameDay, getDay, parseISO } from 'date-fns';
+import { format, addDays, getDay, parseISO } from 'date-fns';
 
 // Types
 interface PatientProfile {

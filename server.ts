@@ -8,7 +8,7 @@ import cors from "cors";
 import { createServer as createViteServer } from "vite";
 import { db, pool } from "./src/db/index.js";
 import { initDb } from "./src/db/init.js";
-import { hashPassword, verifyPassword, generateAuthToken, verifyAuthToken } from "./src/db/auth-utils.js";
+import { hashPassword, verifyPassword, generateAuthToken } from "./src/db/auth-utils.js";
 import { liveQueue, patientRegistry, users, appointments, settings, whatsappMessages, whatsappTemplates, delhiveryOrders, patientShipments, onlineAppointments, appointmentFiles, rescheduleOtps } from "./src/db/schema.js";
 import { eq, desc, asc, and } from "drizzle-orm";
 import { requireStaffAuth, requireAdminAuth, optionalAuth, AuthRequest } from "./src/middleware/auth.js";
@@ -87,17 +87,12 @@ async function startServer() {
       const dbSettings = await db.select().from(settings).where(eq(settings.id, "default")).limit(1);
       let dbUsers = await db.select().from(users);
 
-      const parseDate = (d: any): number => {
-        if (!d) return Date.now();
-        const time = new Date(d).getTime();
-        return isNaN(time) ? Date.now() : time;
+      const toTs = (d: any, fallback?: number) => {
+        const t = d ? new Date(d).getTime() : NaN;
+        return isNaN(t) ? fallback : t;
       };
-
-      const parseOptionalDate = (d: any): number | undefined => {
-        if (!d) return undefined;
-        const time = new Date(d).getTime();
-        return isNaN(time) ? undefined : time;
-      };
+      const parseDate = (d: any) => toTs(d, Date.now())!;
+      const parseOptionalDate = (d: any) => toTs(d);
 
       res.json({
         patients: dbPatients.map(p => ({ 
@@ -359,8 +354,7 @@ app.post('/api/settings', optionalAuth, async (req: AuthRequest, res) => {
     }
   });
 
-  
-  // WhatsApp Webhook Verification (GET)
+// WhatsApp Webhook Verification (GET)
   app.get('/api/whatsapp/webhook', (req, res) => {
     const mode = req.query['hub.mode'];
     const token = req.query['hub.verify_token'];
@@ -480,7 +474,7 @@ app.post('/api/settings', optionalAuth, async (req: AuthRequest, res) => {
           const msgLower = (textContent || '').toLowerCase();
           if (msgLower.includes('appointment') || msgLower.includes('book') || msgLower.includes('consultation') || msgLower.includes('online')) {
             try {
-              const autoReply = `Hello! 🙏\n\nTo book an online video consultation with Dr. Sunil Kumar, please visit:\n\n👉 https://app.drsunilkumarbhms.in/book-appointment\n\n📋 Steps:\n1. Fill in your details\n2. Make payment (₹199)\n3. Choose your preferred time slot\n4. Get instant Google Meet link\n\nFor any queries, call us at +91 94562 18066`;
+              const autoReply = `Hello! ðŸ™\n\nTo book an online video consultation with Dr. Sunil Kumar, please visit:\n\nðŸ‘‰ https://app.drsunilkumarbhms.in/book-appointment\n\nðŸ“‹ Steps:\n1. Fill in your details\n2. Make payment (â‚¹199)\n3. Choose your preferred time slot\n4. Get instant Google Meet link\n\nFor any queries, call us at +91 94562 18066`;
               const dbSettings = await db.select().from(settings).where(eq(settings.id, "default")).limit(1);
               const s = dbSettings[0];
               const waKey = s?.whatsappApiKey;
@@ -510,7 +504,6 @@ app.post('/api/settings', optionalAuth, async (req: AuthRequest, res) => {
     notifyClients(); // Tell React to fetch new messages
     res.sendStatus(200);
   });
-
 
 const otpStore = new Map<string, { otp: string, expires: number, type?: string }>();
 
@@ -575,6 +568,22 @@ app.post('/api/login', checkLoginRateLimit, async (req, res) => {
   }
 });
 
+// Shared helper to configure nodemailer transporter
+function getSmtpTransporter(s?: any) {
+  const host = s?.smtpHost || s?.smtp_host || process.env.SMTP_HOST || 'smtp.hostinger.com';
+  const port = parseInt(s?.smtpPort || s?.smtp_port || process.env.SMTP_PORT || '465', 10);
+  const user = s?.smtpUser || s?.smtp_user || process.env.SMTP_USER;
+  const pass = s?.smtpPass || s?.smtp_pass || process.env.SMTP_PASS;
+  if (!user || !pass) return null;
+  return {
+    transporter: nodemailer.createTransport({
+      host, port, secure: port === 465,
+      auth: { user, pass }
+    }),
+    user
+  };
+}
+
 app.post('/api/send-otp', checkOtpSendRateLimit, async (req, res) => {
   const { email, fullName, type } = req.body;
   if (!email) return res.status(400).json({ error: 'Email is required' });
@@ -583,28 +592,13 @@ app.post('/api/send-otp', checkOtpSendRateLimit, async (req, res) => {
 
   try {
     const dbSettings = await db.select().from(settings).where(eq(settings.id, "default")).limit(1);
-    const s = dbSettings[0];
-    const smtpHost = s?.smtpHost || process.env.SMTP_HOST || 'smtp.hostinger.com';
-    const smtpPort = parseInt(s?.smtpPort || process.env.SMTP_PORT || '465');
-    const smtpUser = s?.smtpUser || process.env.SMTP_USER;
-    const smtpPass = s?.smtpPass || process.env.SMTP_PASS;
-
-    if (!smtpUser || !smtpPass) {
+    const mailer = getSmtpTransporter(dbSettings[0]);
+    if (!mailer) {
        console.log(`[OTP Generated for ${email}]: ${otp} (SMTP not yet configured in Settings/env)`);
        return res.status(400).json({ 
          error: 'SMTP credentials not configured yet in Settings. Please use "Password Login" to sign in first.' 
        });
     }
-
-    const transporter = nodemailer.createTransport({
-      host: smtpHost,
-      port: smtpPort,
-      secure: smtpPort === 465,
-      auth: {
-        user: smtpUser,
-        pass: smtpPass,
-      },
-    });
 
     const isLogin = type === 'login';
     const subject = isLogin ? 'Staff Login Verification' : 'Your Clinic Check-in OTP';
@@ -613,8 +607,8 @@ app.post('/api/send-otp', checkOtpSendRateLimit, async (req, res) => {
 <br><br>Use the code below to securely verify your login to the clinic dashboard.` : `Hey ${fullName || 'there'},
 <br><br>Use the code below to securely verify your self check-in.`;
 
-    await transporter.sendMail({
-      from: smtpUser,
+    await mailer.transporter.sendMail({
+      from: mailer.user,
       to: email,
       subject,
       html: `
@@ -641,40 +635,24 @@ app.post('/api/send-otp', checkOtpSendRateLimit, async (req, res) => {
   }
 });
 
-
 app.post('/api/send-styled-email', async (req, res) => {
   const { email, subject, title, heading, body, highlight, footer } = req.body;
   if (!email) return res.status(400).json({ error: 'Email is required' });
 
   try {
     const dbSettings = await db.select().from(settings).where(eq(settings.id, "default")).limit(1);
-    const s = dbSettings[0];
-    const smtpHost = s?.smtpHost || process.env.SMTP_HOST || 'smtp.hostinger.com';
-    const smtpPort = parseInt(s?.smtpPort || process.env.SMTP_PORT || '465');
-    const smtpUser = s?.smtpUser || process.env.SMTP_USER;
-    const smtpPass = s?.smtpPass || process.env.SMTP_PASS;
-
-    if (!smtpUser || !smtpPass) {
+    const mailer = getSmtpTransporter(dbSettings[0]);
+    if (!mailer) {
        return res.status(500).json({ error: 'SMTP credentials not configured in Settings.' });
     }
-
-    const transporter = nodemailer.createTransport({
-      host: smtpHost,
-      port: smtpPort,
-      secure: smtpPort === 465,
-      auth: {
-        user: smtpUser,
-        pass: smtpPass,
-      },
-    });
 
     let footerHtml = '';
     if (footer && Array.isArray(footer)) {
       footerHtml = footer.map(f => `<div style="margin-top: 20px;"><h4 style="margin: 0 0 5px 0; color: #ffffff; font-size: 14px;">${f.title}</h4><p style="margin: 0; font-size: 14px; color: #9ca3af;">${f.desc}</p></div>`).join('');
     }
 
-    await transporter.sendMail({
-      from: smtpUser,
+    await mailer.transporter.sendMail({
+      from: mailer.user,
       to: email,
       subject: subject || title || 'Krishna Homoeopathic Clinic',
       html: `
@@ -685,15 +663,13 @@ app.post('/api/send-styled-email', async (req, res) => {
         ${body ? `<p style="font-size: 16px; line-height: 1.5; margin-bottom: 24px; color: #d1d5db;">${body}</p>` : ''}
         ${highlight ? `<div style="background-color: #0d9488; color: #ffffff; padding: 16px; text-align: center; border-radius: 8px; font-size: 24px; font-weight: bold; letter-spacing: 2px; margin-bottom: 24px;">${highlight}</div>` : ''}
         ${footerHtml ? `<div style="border-top: 1px solid #374151; padding-top: 20px; margin-top: 20px;">${footerHtml}</div>` : ''}
-        
-        
-        <div style="margin-top: 30px; margin-bottom: 20px; text-align: center;">
+
+<div style="margin-top: 30px; margin-bottom: 20px; text-align: center;">
           <a href="https://drsunilkumarbhms.in" style="background-color: #0d9488; color: #ffffff; padding: 12px 20px; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 14px; display: inline-block; margin-right: 10px;">Visit Clinic Website</a>
           <a href="tel:5676350536" style="background-color: #1f2937; border: 1px solid #374151; color: #ffffff; padding: 12px 20px; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 14px; display: inline-block; margin-left: 10px;">Call Now</a>
         </div>
 
-
-      </div>
+</div>
     `,
     });
 
@@ -777,28 +753,16 @@ app.post('/api/forgot-password', checkOtpSendRateLimit, async (req, res) => {
     otpStore.set(targetEmail, { otp, expires: Date.now() + 10 * 60 * 1000, type: 'password_reset' });
 
     const dbSettings = await db.select().from(settings).where(eq(settings.id, "default")).limit(1);
-    const s = dbSettings[0];
-    const smtpHost = s?.smtpHost || process.env.SMTP_HOST || 'smtp.hostinger.com';
-    const smtpPort = parseInt(s?.smtpPort || process.env.SMTP_PORT || '465');
-    const smtpUser = s?.smtpUser || process.env.SMTP_USER;
-    const smtpPass = s?.smtpPass || process.env.SMTP_PASS;
-
-    if (!smtpUser || !smtpPass) {
+    const mailer = getSmtpTransporter(dbSettings[0]);
+    if (!mailer) {
       console.log(`[Password Reset OTP for ${targetEmail}]: ${otp} (SMTP not yet configured in Settings)`);
       return res.status(400).json({ 
         error: 'SMTP email server is not configured in Settings yet. Superadmins can sign in directly at /setup.' 
       });
     }
 
-    const transporter = nodemailer.createTransport({
-      host: smtpHost,
-      port: smtpPort,
-      secure: smtpPort === 465,
-      auth: { user: smtpUser, pass: smtpPass },
-    });
-
-    await transporter.sendMail({
-      from: smtpUser,
+    await mailer.transporter.sendMail({
+      from: mailer.user,
       to: targetEmail,
       subject: 'Password Reset Code - Krishna Homoeopathic Clinic',
       html: `
@@ -1048,8 +1012,7 @@ app.post("/api/action", optionalAuth, async (req: AuthRequest, res) => {
     }
   });
 
-  
-  app.post('/api/whatsapp/templates', requireAdminAuth, async (req, res) => {
+app.post('/api/whatsapp/templates', requireAdminAuth, async (req, res) => {
     try {
       const { templates } = req.body;
       await db.delete(whatsappTemplates);
@@ -1063,8 +1026,7 @@ app.post("/api/action", optionalAuth, async (req: AuthRequest, res) => {
     }
   });
 
-  
-  // Delhivery Courier Integration
+// Delhivery Courier Integration
   app.post('/api/delhivery/rates', requireStaffAuth, async (req, res) => {
     try {
       const dbSettings = await db.select().from(settings).where(eq(settings.id, "default")).limit(1);
@@ -1345,7 +1307,7 @@ app.post("/api/action", optionalAuth, async (req: AuthRequest, res) => {
       if (rawData && typeof rawData === 'object') {
         if (typeof rawData.prepaid === 'string') {
           problems.push(rawData.prepaid);
-          hint = 'Delhivery requires a minimum wallet balance of ₹500.0 for prepaid accounts to schedule pickups. Your balance is below ₹500.0, so the carrier cannot schedule the pickup until your wallet is recharged on one.delhivery.com.';
+          hint = 'Delhivery requires a minimum wallet balance of â‚¹500.0 for prepaid accounts to schedule pickups. Your balance is below â‚¹500.0, so the carrier cannot schedule the pickup until your wallet is recharged on one.delhivery.com.';
         }
         if (typeof rawData.detail === 'string') {
           problems.push(rawData.detail);
@@ -1415,9 +1377,8 @@ app.post("/api/action", optionalAuth, async (req: AuthRequest, res) => {
         body: JSON.stringify({ waybill, cancellation: true })
       });
       const data = await response.json();
-      
-      
-      await db.update(delhiveryOrders).set({ status: 'Cancelled' }).where(eq(delhiveryOrders.awb, waybill));
+
+await db.update(delhiveryOrders).set({ status: 'Cancelled' }).where(eq(delhiveryOrders.awb, waybill));
       
       res.json(data);
     } catch (e) {
@@ -1451,8 +1412,7 @@ app.post("/api/action", optionalAuth, async (req: AuthRequest, res) => {
     }
   });
 
-
-      app.get('/api/delhivery/label-url/:awb', requireStaffAuth, async (req, res) => {
+app.get('/api/delhivery/label-url/:awb', requireStaffAuth, async (req, res) => {
     try {
       const dbSettings = await db.select().from(settings).where(eq(settings.id, "default")).limit(1);
       const s = dbSettings[0];
@@ -1843,8 +1803,7 @@ app.post("/api/action", optionalAuth, async (req: AuthRequest, res) => {
     });
   });
 
-
-  // ===== ONLINE APPOINTMENT SYSTEM =====
+// ===== ONLINE APPOINTMENT SYSTEM =====
 
 // Helper to compute public redirect URI with proper HTTPS scheme behind reverse proxy
 function getPublicRedirectUri(req: express.Request): string {
@@ -1952,22 +1911,14 @@ async function sendStaffNotification(s: any, emailData: any) {
   const emails = s.notification_emails.split(',').map((e: string) => e.trim()).filter(Boolean);
   if (emails.length === 0) return;
   
-  const smtpHost = s.smtp_host || process.env.SMTP_HOST;
-  const smtpPort = parseInt(s.smtp_port || process.env.SMTP_PORT || '465');
-  const smtpUser = s.smtp_user || process.env.SMTP_USER;
-  const smtpPass = s.smtp_pass || process.env.SMTP_PASS;
-  if (!smtpHost || !smtpUser || !smtpPass) return;
-  
-  const transporter = nodemailer.createTransport({
-    host: smtpHost, port: smtpPort, secure: smtpPort === 465,
-    auth: { user: smtpUser, pass: smtpPass }
-  });
+  const mailer = getSmtpTransporter(s);
+  if (!mailer) return;
   
   const html = buildStaffNotificationEmail(emailData);
   for (const email of emails) {
     try {
-      await transporter.sendMail({
-        from: `"Krishna Homoeopathic Clinic" <${smtpUser}>`,
+      await mailer.transporter.sendMail({
+        from: `"Krishna Homoeopathic Clinic" <${mailer.user}>`,
         to: email,
         subject: `New Online Appointment - ${emailData.patientName} (${emailData.date} ${emailData.timeSlot})`,
         html
@@ -1980,19 +1931,11 @@ async function sendStaffNotification(s: any, emailData: any) {
 
 // Helper: Send email to patient
 async function sendPatientEmail(s: any, to: string, subject: string, html: string) {
-  const smtpHost = s.smtp_host || process.env.SMTP_HOST;
-  const smtpPort = parseInt(s.smtp_port || process.env.SMTP_PORT || '465');
-  const smtpUser = s.smtp_user || process.env.SMTP_USER;
-  const smtpPass = s.smtp_pass || process.env.SMTP_PASS;
-  if (!smtpHost || !smtpUser || !smtpPass) return;
+  const mailer = getSmtpTransporter(s);
+  if (!mailer) return;
   
-  const transporter = nodemailer.createTransport({
-    host: smtpHost, port: smtpPort, secure: smtpPort === 465,
-    auth: { user: smtpUser, pass: smtpPass }
-  });
-  
-  await transporter.sendMail({
-    from: `"Krishna Homoeopathic Clinic" <${smtpUser}>`,
+  await mailer.transporter.sendMail({
+    from: `"Krishna Homoeopathic Clinic" <${mailer.user}>`,
     to, subject, html
   });
 }
@@ -3575,9 +3518,7 @@ setInterval(async () => {
     app.get('*', (req, res) => res.sendFile(path.join(distPath, 'index.html')));
   }
 
-  
-  
-  app.listen(PORT, "0.0.0.0", () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, "0.0.0.0", () => console.log(`Server running on port ${PORT}`));
 }
 
 startServer();

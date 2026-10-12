@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useClinic } from '../context/ClinicContext';
-import { Patient, PatientStatus } from '../types';
+import { Patient } from '../types';
 import { formatWaitTime, cn } from '../lib/utils';
 import { getLocalTodayString, isSameDayLocal } from '../lib/dateUtils';
 import { RefreshCcw, GripVertical, Clock, ChevronUp, ChevronDown } from 'lucide-react';

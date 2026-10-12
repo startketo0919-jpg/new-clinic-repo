@@ -3,8 +3,8 @@ import { useClinic } from '../context/ClinicContext';
 import { PatientShipment } from '../types';
 import { 
   Package, CheckCircle2, Clock, Phone, Mail, MapPin, Copy, Check, 
-  Search, ExternalLink, MessageSquare, Trash2, ArrowRight, Truck, 
-  Share2, AlertCircle, RefreshCw, Crop, Printer 
+  Search, MessageSquare, Trash2, ArrowRight, Truck, 
+  Share2, Crop, Printer 
 } from 'lucide-react';
 import LabelCropModal from './LabelCropModal';
 

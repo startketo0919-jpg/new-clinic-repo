@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useClinic } from '../context/ClinicContext';
-import { Search, Clock, Users, ArrowLeft, UserCircle, Calendar, UserPlus, AlertCircle } from 'lucide-react';
+import { Search, Clock, ArrowLeft, Calendar, UserPlus, AlertCircle } from 'lucide-react';
 import { getLocalTodayString, isSameDayLocal } from "../lib/dateUtils";
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';

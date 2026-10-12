@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   X, Printer, Usb, Wifi, Crop, Download, RefreshCw, 
-  CheckCircle2, AlertCircle, FileText, ExternalLink, Smartphone 
+  AlertCircle, FileText, ExternalLink, Smartphone 
 } from 'lucide-react';
 
 interface LabelCropModalProps {
