@@ -28,7 +28,7 @@
     "googleapis": "^144.0.0",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
-    "multer": "^1.4.5-lts.1",
+    "multer": "^2.3.0",
     "mysql2": "^3.12.0",
     "node-cron": "^3.0.3",
     "nodemailer": "^10.0.10",
@@ -48,10 +48,16 @@
     "@types/pg": "^8.23.1",
     "autoprefixer": "^10.4.21",
     "drizzle-kit": "^0.31.10",
-    "esbuild": "^0.25.0",
+    "esbuild": "^0.28.1",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
     "vite": "^6.2.3"
+  },
+  "overrides": {
+    "multer": "^2.3.0",
+    "esbuild": "^0.28.1",
+    "@grpc/grpc-js": "^1.13.6",
+    "uuid": "^11.1.1"
   }
 }
