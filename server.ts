@@ -379,10 +379,14 @@ app.post('/api/settings', optionalAuth, async (req: AuthRequest, res) => {
   app.post('/api/whatsapp/send', requireStaffAuth, async (req, res) => {
     try {
       let { phone, content, templateName, templateLanguage, templateComponents } = req.body;
-      // Auto-append 91 if it's a 10 digit Indian number for WhatsApp
-      if (phone.length === 10 && !phone.startsWith('91')) {
-        phone = '91' + phone;
+      if (!phone) {
+        return res.status(400).json({ error: 'Phone number is required' });
       }
+      let cleanPhone = String(phone).replace(/\D/g, '');
+      if (cleanPhone.length === 10) {
+        cleanPhone = '91' + cleanPhone;
+      }
+      phone = cleanPhone;
       const dbSettings = await db.select().from(settings).where(eq(settings.id, "default")).limit(1);
       const s = dbSettings[0];
       

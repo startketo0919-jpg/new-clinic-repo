@@ -544,11 +544,19 @@ export function ClinicProvider({ children }: { children: React.ReactNode }) {
         timestamp: Date.now()
       }]
     }));
-    await fetch('/api/whatsapp/send', {
+    const token = sessionStorage.getItem('staffAuthToken') || '';
+    const res = await fetch('/api/whatsapp/send', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
       body: JSON.stringify({ phone, content, templateName, templateLanguage, templateComponents })
     });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to send WhatsApp message');
+    }
     // the state will be re-fetched by the polling loop
   };
 

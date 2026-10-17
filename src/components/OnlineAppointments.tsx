@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Calendar, Video, Phone, Download, RefreshCw, Search, Filter, ChevronDown, ChevronUp, Check, X, Trash2, FileText, MapPin, ExternalLink, CalendarDays, List, IndianRupee, Eye, Truck, Link2, UserPlus, Sparkles, Copy, Plus, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { Calendar, Video, Phone, Download, RefreshCw, Search, Filter, ChevronDown, ChevronUp, Check, X, Trash2, FileText, MapPin, ExternalLink, CalendarDays, List, IndianRupee, Eye, Truck, Link2, UserPlus, Sparkles, Copy, Plus, AlertCircle, CheckCircle2, MessageSquare, Send, Sliders } from 'lucide-react';
 import { format, startOfMonth, endOfMonth, startOfWeek, endOfWeek, eachDayOfInterval, isSameMonth, isToday, addMonths, subMonths, parseISO } from 'date-fns';
 import { cn } from '../lib/utils';
 
@@ -222,8 +222,120 @@ export default function OnlineAppointments({ userRole, onAutofillDelhivery }: On
   const [newCustomNotes, setNewCustomNotes] = useState('');
   const [generatingCustomLink, setGeneratingCustomLink] = useState(false);
   const [createdLinkUrl, setCreatedLinkUrl] = useState('');
+  const [createdLinkData, setCreatedLinkData] = useState<{
+    bookingUrl: string;
+    amount: number;
+    patientName?: string;
+    phone?: string;
+  } | null>(null);
   const [copiedLinkId, setCopiedLinkId] = useState<string | null>(null);
   const [customLinkError, setCustomLinkError] = useState('');
+
+  // WhatsApp Messaging for Custom Links
+  const DEFAULT_CUSTOM_LINK_WA_TEMPLATE = `Dear {patientName},
+
+Greetings from Dr. Sunil Kumar (Krishna Homoeopathic Clinic)! 🙏
+
+As discussed, here is your special appointment booking link with customized consultation charges:
+
+📋 *Consultation Fee Breakdown:*
+• Standard Consultation Fee: ₹{normalFee}
+• Post Follow-Up Window Fee: ₹{sameConcernFee}
+• Follow-Up (within {followUpDays} days): {followUpFeeDisplay}
+👉 *Special Consultation Fee for You: ₹{customAmount}*
+
+🔗 *Book Your Appointment Slot Here:*
+{bookingUrl}
+
+Please click the link above, choose your convenient date & time slot, and confirm your consultation.
+_(Note: This is a secure one-time booking link created specifically for you)._
+
+Warm regards,
+*Dr. Sunil Kumar BHMS*
+Krishna Homoeopathic Clinic`;
+
+  const [waTemplate, setWaTemplate] = useState<string>(() => {
+    return localStorage.getItem('custom_link_wa_template') || DEFAULT_CUSTOM_LINK_WA_TEMPLATE;
+  });
+  const [whatsAppPhoneNew, setWhatsAppPhoneNew] = useState('');
+  const [showMessagePreviewNew, setShowMessagePreviewNew] = useState(false);
+  const [activeWhatsAppLinkId, setActiveWhatsAppLinkId] = useState<string | null>(null);
+  const [whatsAppPhoneForList, setWhatsAppPhoneForList] = useState('');
+  const [sendingWhatsAppForId, setSendingWhatsAppForId] = useState<string | null>(null);
+  const [whatsAppSuccessMessage, setWhatsAppSuccessMessage] = useState<string | null>(null);
+  const [whatsAppErrorMessage, setWhatsAppErrorMessage] = useState<string | null>(null);
+  const [showTemplateEditor, setShowTemplateEditor] = useState(false);
+  const [templateSavedNotice, setTemplateSavedNotice] = useState(false);
+
+  const buildWhatsAppMessage = (params: {
+    patientName?: string;
+    customAmount: number | string;
+    bookingUrl: string;
+  }) => {
+    const pName = params.patientName?.trim() ? params.patientName.trim() : 'Patient';
+    const followUpDisplay = (feeSettings.followUpFee || 0) === 0 ? 'FREE' : `₹${feeSettings.followUpFee}`;
+    return waTemplate
+      .replace(/\{patientName\}/g, pName)
+      .replace(/\{customAmount\}/g, String(params.customAmount))
+      .replace(/\{bookingUrl\}/g, params.bookingUrl)
+      .replace(/\{normalFee\}/g, String(feeSettings.normalFee || 199))
+      .replace(/\{sameConcernFee\}/g, String(feeSettings.sameConcernFee || 199))
+      .replace(/\{followUpDays\}/g, String(feeSettings.followUpDays || 7))
+      .replace(/\{followUpFeeDisplay\}/g, followUpDisplay);
+  };
+
+  const handleSendWhatsApp = async (phone: string, messageText: string, linkId: string = 'NEW') => {
+    const cleanPhone = phone.replace(/\D/g, '').slice(-10);
+    if (!/^[6-9]\d{9}$/.test(cleanPhone)) {
+      setWhatsAppErrorMessage('Please enter a valid 10-digit Indian mobile number starting with 6-9');
+      return;
+    }
+    setSendingWhatsAppForId(linkId);
+    setWhatsAppErrorMessage(null);
+    setWhatsAppSuccessMessage(null);
+    try {
+      const token = sessionStorage.getItem('staffAuthToken') || '';
+      const res = await fetch('/api/whatsapp/send', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          phone: cleanPhone,
+          content: messageText
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setWhatsAppSuccessMessage(`✓ WhatsApp message sent to ${cleanPhone}!`);
+      } else {
+        setWhatsAppErrorMessage(data.error || 'Failed to send WhatsApp message. (You can still use "Open in WhatsApp")');
+      }
+    } catch (err: any) {
+      setWhatsAppErrorMessage(err.message || 'Network error while sending WhatsApp message');
+    } finally {
+      setSendingWhatsAppForId(null);
+    }
+  };
+
+  const openWhatsAppDirect = (phone: string, messageText: string) => {
+    const cleanPhone = phone.replace(/\D/g, '').slice(-10);
+    const target = cleanPhone ? `91${cleanPhone}` : '';
+    const url = `https://api.whatsapp.com/send?phone=${target}&text=${encodeURIComponent(messageText)}`;
+    window.open(url, '_blank');
+  };
+
+  const handleSaveTemplate = () => {
+    localStorage.setItem('custom_link_wa_template', waTemplate);
+    setTemplateSavedNotice(true);
+    setTimeout(() => setTemplateSavedNotice(false), 2500);
+  };
+
+  const handleResetTemplate = () => {
+    setWaTemplate(DEFAULT_CUSTOM_LINK_WA_TEMPLATE);
+    localStorage.removeItem('custom_link_wa_template');
+  };
 
   const fetchCustomLinks = async () => {
     const token = sessionStorage.getItem('staffAuthToken') || '';
@@ -247,6 +359,7 @@ export default function OnlineAppointments({ userRole, onAutofillDelhivery }: On
     e.preventDefault();
     setCustomLinkError('');
     setCreatedLinkUrl('');
+    setCreatedLinkData(null);
     const amt = parseFloat(newCustomAmount);
     if (isNaN(amt) || amt < 0) {
       setCustomLinkError('Please enter a valid amount (₹)');
@@ -268,6 +381,15 @@ export default function OnlineAppointments({ userRole, onAutofillDelhivery }: On
       const data = await res.json();
       if (res.ok) {
         setCreatedLinkUrl(data.bookingUrl);
+        setCreatedLinkData({
+          bookingUrl: data.bookingUrl,
+          amount: amt,
+          patientName: newCustomPatientName.trim() || undefined,
+          phone: newCustomPhone.trim() || undefined
+        });
+        setWhatsAppPhoneNew(newCustomPhone.trim());
+        setWhatsAppSuccessMessage(null);
+        setWhatsAppErrorMessage(null);
         setNewCustomAmount('');
         setNewCustomPatientName('');
         setNewCustomPhone('');
@@ -1350,9 +1472,9 @@ export default function OnlineAppointments({ userRole, onAutofillDelhivery }: On
               </div>
 
               {createdLinkUrl && (
-                <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl space-y-2">
+                <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl space-y-3">
                   <div className="flex items-center gap-2 text-emerald-800 text-xs font-bold">
-                    <CheckCircle2 className="w-4 h-4" /> Custom Link Generated Successfully!
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600" /> Custom Link Generated Successfully!
                   </div>
                   <div className="flex items-center gap-2">
                     <input
@@ -1364,11 +1486,106 @@ export default function OnlineAppointments({ userRole, onAutofillDelhivery }: On
                     <button
                       type="button"
                       onClick={() => copyToClipboard(createdLinkUrl, 'NEW')}
-                      className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-lg flex items-center gap-1.5 shadow-sm transition-colors"
+                      className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-lg flex items-center gap-1.5 shadow-sm transition-colors shrink-0"
                     >
                       {copiedLinkId === 'NEW' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
                       {copiedLinkId === 'NEW' ? 'Copied!' : 'Copy Link'}
                     </button>
+                  </div>
+
+                  {/* Send to WhatsApp Block */}
+                  <div className="pt-2 border-t border-emerald-200/80 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-emerald-900 flex items-center gap-1.5">
+                        <MessageSquare className="w-3.5 h-3.5 text-emerald-700" /> Send via WhatsApp (Reply / Direct)
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setShowMessagePreviewNew(!showMessagePreviewNew)}
+                        className="text-[11px] font-semibold text-emerald-700 hover:text-emerald-900 underline"
+                      >
+                        {showMessagePreviewNew ? 'Hide Framed Message' : 'Preview Framed Message'}
+                      </button>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                      <div className="relative flex-1">
+                        <Phone className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-400" />
+                        <input
+                          type="tel"
+                          maxLength={10}
+                          placeholder="10-digit Patient WhatsApp Mobile"
+                          value={whatsAppPhoneNew}
+                          onChange={e => setWhatsAppPhoneNew(e.target.value.replace(/\D/g, ''))}
+                          className="w-full pl-8 pr-3 py-2 bg-white border border-emerald-300 rounded-lg text-xs font-semibold text-slate-800 placeholder-slate-400 focus:ring-2 focus:ring-emerald-500 outline-none"
+                        />
+                      </div>
+
+                      <button
+                        type="button"
+                        disabled={sendingWhatsAppForId === 'NEW' || !whatsAppPhoneNew}
+                        onClick={() => handleSendWhatsApp(whatsAppPhoneNew, buildWhatsAppMessage({
+                          patientName: createdLinkData?.patientName,
+                          customAmount: createdLinkData?.amount ?? 0,
+                          bookingUrl: createdLinkUrl
+                        }), 'NEW')}
+                        className="px-3.5 py-2 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 shadow-sm transition-colors shrink-0"
+                        title="Send directly using Meta WhatsApp Cloud API as a customer reply"
+                      >
+                        {sendingWhatsAppForId === 'NEW' ? (
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <Send className="w-3.5 h-3.5" />
+                        )}
+                        Send WhatsApp API
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => openWhatsAppDirect(whatsAppPhoneNew, buildWhatsAppMessage({
+                          patientName: createdLinkData?.patientName,
+                          customAmount: createdLinkData?.amount ?? 0,
+                          bookingUrl: createdLinkUrl
+                        }))}
+                        className="px-3 py-2 bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-300 text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 transition-colors shrink-0"
+                        title="Open in WhatsApp Web / App with message pre-typed"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" /> Open in WhatsApp
+                      </button>
+                    </div>
+
+                    {whatsAppSuccessMessage && sendingWhatsAppForId === null && (
+                      <div className="p-2 bg-white text-emerald-700 border border-emerald-300 rounded-lg text-xs font-semibold flex items-center gap-1.5">
+                        <CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> {whatsAppSuccessMessage}
+                      </div>
+                    )}
+
+                    {whatsAppErrorMessage && sendingWhatsAppForId === null && (
+                      <div className="p-2 bg-rose-50 text-rose-700 border border-rose-200 rounded-lg text-xs flex items-center justify-between gap-2">
+                        <span>{whatsAppErrorMessage}</span>
+                        <button
+                          type="button"
+                          onClick={() => openWhatsAppDirect(whatsAppPhoneNew, buildWhatsAppMessage({
+                            patientName: createdLinkData?.patientName,
+                            customAmount: createdLinkData?.amount ?? 0,
+                            bookingUrl: createdLinkUrl
+                          }))}
+                          className="text-[11px] underline font-bold shrink-0 text-emerald-800"
+                        >
+                          Open in Web Instead
+                        </button>
+                      </div>
+                    )}
+
+                    {showMessagePreviewNew && (
+                      <div className="bg-white p-3 rounded-lg border border-emerald-200 text-xs font-sans whitespace-pre-wrap text-slate-700 leading-relaxed max-h-48 overflow-auto">
+                        {buildWhatsAppMessage({
+                          patientName: createdLinkData?.patientName,
+                          customAmount: createdLinkData?.amount ?? 0,
+                          bookingUrl: createdLinkUrl
+                        })}
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -1443,6 +1660,50 @@ export default function OnlineAppointments({ userRole, onAutofillDelhivery }: On
                 </div>
               </form>
 
+              {/* Customize Message Template Section */}
+              <div className="border border-slate-200 rounded-xl overflow-hidden bg-slate-50">
+                <button
+                  type="button"
+                  onClick={() => setShowTemplateEditor(!showTemplateEditor)}
+                  className="w-full p-3 text-left flex items-center justify-between text-xs font-bold text-slate-700 hover:bg-slate-100 transition-colors"
+                >
+                  <span className="flex items-center gap-1.5">
+                    <Sliders className="w-3.5 h-3.5 text-indigo-600" /> Customize Framed WhatsApp Message & Price List
+                  </span>
+                  <span className="text-slate-400 font-normal">{showTemplateEditor ? '▲ Close' : '▼ Edit & Save Template'}</span>
+                </button>
+                
+                {showTemplateEditor && (
+                  <div className="p-4 border-t border-slate-200 bg-white space-y-3">
+                    <p className="text-xs text-slate-500 leading-relaxed">
+                      This template is automatically populated with the link and price list when replying on WhatsApp. Variables: <code className="bg-slate-100 px-1 py-0.5 rounded text-indigo-600 font-mono text-[11px]">&#123;patientName&#125;</code>, <code className="bg-slate-100 px-1 py-0.5 rounded text-indigo-600 font-mono text-[11px]">&#123;customAmount&#125;</code>, <code className="bg-slate-100 px-1 py-0.5 rounded text-indigo-600 font-mono text-[11px]">&#123;bookingUrl&#125;</code>, <code className="bg-slate-100 px-1 py-0.5 rounded text-indigo-600 font-mono text-[11px]">&#123;normalFee&#125;</code>, <code className="bg-slate-100 px-1 py-0.5 rounded text-indigo-600 font-mono text-[11px]">&#123;sameConcernFee&#125;</code>, <code className="bg-slate-100 px-1 py-0.5 rounded text-indigo-600 font-mono text-[11px]">&#123;followUpDays&#125;</code>, <code className="bg-slate-100 px-1 py-0.5 rounded text-indigo-600 font-mono text-[11px]">&#123;followUpFeeDisplay&#125;</code>.
+                    </p>
+                    <textarea
+                      rows={8}
+                      value={waTemplate}
+                      onChange={e => setWaTemplate(e.target.value)}
+                      className="w-full p-3 border border-slate-200 rounded-lg text-xs font-mono focus:ring-2 focus:ring-indigo-500 outline-none leading-relaxed"
+                    />
+                    <div className="flex items-center justify-between pt-1">
+                      <button
+                        type="button"
+                        onClick={handleResetTemplate}
+                        className="text-xs text-slate-500 hover:text-slate-700 underline"
+                      >
+                        Reset to Default
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleSaveTemplate}
+                        className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg shadow-sm transition-colors flex items-center gap-1.5"
+                      >
+                        <Check className="w-3.5 h-3.5" /> {templateSavedNotice ? 'Template Saved!' : 'Save Template'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* Existing links */}
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
@@ -1467,54 +1728,167 @@ export default function OnlineAppointments({ userRole, onAutofillDelhivery }: On
                     {customLinks.map((l) => {
                       const linkUrl = `https://app.drsunilkumarbhms.in/book?customToken=${l.token}`;
                       return (
-                        <div key={l.id} className="p-3 sm:p-4 flex items-center justify-between gap-3 text-sm">
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className="font-bold text-amber-900 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded text-xs">
-                                ₹{l.amount}
-                              </span>
-                              {l.patientName && <span className="font-bold text-slate-800">{l.patientName}</span>}
-                              {l.phone && <span className="text-xs text-slate-500">({l.phone})</span>}
-                              {l.isUsed ? (
-                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200">
-                                  Used {l.usedAt ? format(new Date(l.usedAt), 'dd MMM yyyy') : ''}
+                        <div key={l.id} className="divide-y divide-slate-100">
+                          <div className="p-3 sm:p-4 flex items-center justify-between gap-3 text-sm">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="font-bold text-amber-900 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded text-xs">
+                                  ₹{l.amount}
                                 </span>
-                              ) : (
-                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
-                                  Active (Unused)
-                                </span>
+                                {l.patientName && <span className="font-bold text-slate-800">{l.patientName}</span>}
+                                {l.phone && <span className="text-xs text-slate-500">({l.phone})</span>}
+                                {l.isUsed ? (
+                                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200">
+                                    Used {l.usedAt ? format(new Date(l.usedAt), 'dd MMM yyyy') : ''}
+                                  </span>
+                                ) : (
+                                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                    Active (Unused)
+                                  </span>
+                                )}
+                              </div>
+                              {l.notes && <div className="text-xs text-slate-500 mt-1 truncate">{l.notes}</div>}
+                              <div className="text-[11px] text-slate-400 mt-1">
+                                Created {format(new Date(l.createdAt), 'dd MMM yyyy, hh:mm a')} by {l.createdBy || 'doctor'}
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-2 shrink-0">
+                              {!l.isUsed && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (activeWhatsAppLinkId === l.id) {
+                                      setActiveWhatsAppLinkId(null);
+                                    } else {
+                                      setActiveWhatsAppLinkId(l.id);
+                                      setWhatsAppPhoneForList(l.phone || '');
+                                      setWhatsAppSuccessMessage(null);
+                                      setWhatsAppErrorMessage(null);
+                                    }
+                                  }}
+                                  className={`px-2.5 py-1.5 text-xs font-semibold rounded-lg flex items-center gap-1 transition-colors ${
+                                    activeWhatsAppLinkId === l.id
+                                      ? 'bg-emerald-600 text-white'
+                                      : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                  }`}
+                                  title="Send link via WhatsApp"
+                                >
+                                  <MessageSquare className="w-3.5 h-3.5" /> WhatsApp
+                                </button>
+                              )}
+
+                              {!l.isUsed && (
+                                <button
+                                  type="button"
+                                  onClick={() => copyToClipboard(linkUrl, l.id)}
+                                  className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg flex items-center gap-1 transition-colors"
+                                  title="Copy booking link"
+                                >
+                                  {copiedLinkId === l.id ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                                  {copiedLinkId === l.id ? 'Copied' : 'Copy'}
+                                </button>
+                              )}
+
+                              {!l.isUsed && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteCustomLink(l.id)}
+                                  className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                                  title="Delete link"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
                               )}
                             </div>
-                            {l.notes && <div className="text-xs text-slate-500 mt-1 truncate">{l.notes}</div>}
-                            <div className="text-[11px] text-slate-400 mt-1">
-                              Created {format(new Date(l.createdAt), 'dd MMM yyyy, hh:mm a')} by {l.createdBy || 'doctor'}
+                          </div>
+
+                          {/* Inline WhatsApp Send Panel for this link */}
+                          {!l.isUsed && activeWhatsAppLinkId === l.id && (
+                            <div className="p-3.5 bg-emerald-50/60 border-t border-emerald-100 space-y-2.5 animate-in fade-in">
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs font-bold text-emerald-900 flex items-center gap-1.5">
+                                  <MessageSquare className="w-3.5 h-3.5 text-emerald-700" /> Send Link to Patient WhatsApp
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => setActiveWhatsAppLinkId(null)}
+                                  className="text-[11px] text-slate-400 hover:text-slate-600"
+                                >
+                                  Close
+                                </button>
+                              </div>
+
+                              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                                <div className="relative flex-1">
+                                  <Phone className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-400" />
+                                  <input
+                                    type="tel"
+                                    maxLength={10}
+                                    placeholder="10-digit WhatsApp Mobile"
+                                    value={whatsAppPhoneForList}
+                                    onChange={e => setWhatsAppPhoneForList(e.target.value.replace(/\D/g, ''))}
+                                    className="w-full pl-8 pr-3 py-1.5 bg-white border border-emerald-300 rounded-lg text-xs font-semibold text-slate-800 focus:ring-2 focus:ring-emerald-500 outline-none"
+                                  />
+                                </div>
+
+                                <button
+                                  type="button"
+                                  disabled={sendingWhatsAppForId === l.id || !whatsAppPhoneForList}
+                                  onClick={() => handleSendWhatsApp(whatsAppPhoneForList, buildWhatsAppMessage({
+                                    patientName: l.patientName,
+                                    customAmount: l.amount,
+                                    bookingUrl: linkUrl
+                                  }), l.id)}
+                                  className="px-3.5 py-1.5 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 shadow-sm transition-colors shrink-0"
+                                  title="Send directly using Meta WhatsApp Cloud API"
+                                >
+                                  {sendingWhatsAppForId === l.id ? (
+                                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                                  ) : (
+                                    <Send className="w-3.5 h-3.5" />
+                                  )}
+                                  Send WhatsApp API
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => openWhatsAppDirect(whatsAppPhoneForList, buildWhatsAppMessage({
+                                    patientName: l.patientName,
+                                    customAmount: l.amount,
+                                    bookingUrl: linkUrl
+                                  }))}
+                                  className="px-3 py-1.5 bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-300 text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 transition-colors shrink-0"
+                                  title="Open in WhatsApp Web / App"
+                                >
+                                  <ExternalLink className="w-3.5 h-3.5" /> Open in Web
+                                </button>
+                              </div>
+
+                              {whatsAppSuccessMessage && sendingWhatsAppForId === null && (
+                                <div className="p-2 bg-white text-emerald-700 border border-emerald-300 rounded-lg text-xs font-semibold flex items-center gap-1.5">
+                                  <CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> {whatsAppSuccessMessage}
+                                </div>
+                              )}
+
+                              {whatsAppErrorMessage && sendingWhatsAppForId === null && (
+                                <div className="p-2 bg-rose-50 text-rose-700 border border-rose-200 rounded-lg text-xs flex items-center justify-between gap-2">
+                                  <span>{whatsAppErrorMessage}</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => openWhatsAppDirect(whatsAppPhoneForList, buildWhatsAppMessage({
+                                      patientName: l.patientName,
+                                      customAmount: l.amount,
+                                      bookingUrl: linkUrl
+                                    }))}
+                                    className="text-[11px] underline font-bold shrink-0 text-emerald-800"
+                                  >
+                                    Open in Web Instead
+                                  </button>
+                                </div>
+                              )}
                             </div>
-                          </div>
-
-                          <div className="flex items-center gap-2 shrink-0">
-                            {!l.isUsed && (
-                              <button
-                                type="button"
-                                onClick={() => copyToClipboard(linkUrl, l.id)}
-                                className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg flex items-center gap-1 transition-colors"
-                                title="Copy booking link"
-                              >
-                                {copiedLinkId === l.id ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
-                                {copiedLinkId === l.id ? 'Copied' : 'Copy'}
-                              </button>
-                            )}
-
-                            {!l.isUsed && (
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteCustomLink(l.id)}
-                                className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
-                                title="Delete link"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            )}
-                          </div>
+                          )}
                         </div>
                       );
                     })}
