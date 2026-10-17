@@ -592,7 +592,7 @@ export default function SettingsPage() {
 
                 <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
                   <h4 className="font-semibold text-slate-700 mb-3 flex items-center gap-1.5"><IndianRupee className="w-4 h-4 text-indigo-600" /> Fee Decider & Consultation Pricing</h4>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">Standard Fee (₹)</label>
                       <input 
@@ -615,6 +615,18 @@ export default function SettingsPage() {
                         min="0"
                       />
                       <span className="text-[11px] text-slate-400">Set 0 for FREE</span>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Same Concern (Post-Window) (₹)</label>
+                      <input 
+                        type="number" 
+                        value={state.settings.sameConcernFee !== undefined ? state.settings.sameConcernFee / 100 : (state.settings.consultationFee !== undefined ? state.settings.consultationFee / 100 : 199)} 
+                        onChange={e => updateSettings({ sameConcernFee: (parseFloat(e.target.value) || 0) * 100 })} 
+                        className="w-full px-4 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500" 
+                        placeholder="199"
+                        min="0"
+                      />
+                      <span className="text-[11px] text-slate-400">For returning same concern</span>
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">Follow-up Window (Days)</label>
@@ -641,19 +653,19 @@ export default function SettingsPage() {
                   <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
                     <IndianRupee className="w-6 h-6 text-indigo-600" /> Fee Decider & Consultation Pricing
                   </h3>
-                  <p className="text-slate-500 text-sm mt-1">Configure appointment fees for normal bookings and the 7-day follow-up window.</p>
+                  <p className="text-slate-500 text-sm mt-1">Configure appointment fees for normal bookings, follow-up window, and returning patients with the same concern.</p>
                 </div>
               </div>
 
-              <div className="space-y-6 max-w-2xl">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 bg-slate-50 p-6 rounded-2xl border border-slate-200">
+              <div className="space-y-6 max-w-3xl">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-5 bg-slate-50 p-6 rounded-2xl border border-slate-200">
                   <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between">
                     <div>
                       <div className="flex items-center justify-between mb-1">
-                        <label className="text-sm font-bold text-slate-800">Standard Consultation Fee</label>
+                        <label className="text-sm font-bold text-slate-800">Standard Fee</label>
                         <span className="text-xs px-2 py-0.5 rounded font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">Normal</span>
                       </div>
-                      <p className="text-xs text-slate-500 mb-3">Charged for new appointments or appointments outside the follow-up window.</p>
+                      <p className="text-xs text-slate-500 mb-3">Charged for new patients or different health concerns.</p>
                     </div>
                     <div className="relative mt-2">
                       <span className="absolute left-3.5 top-2.5 text-slate-400 font-bold text-base">₹</span>
@@ -671,10 +683,10 @@ export default function SettingsPage() {
                   <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between">
                     <div>
                       <div className="flex items-center justify-between mb-1">
-                        <label className="text-sm font-bold text-slate-800">7-Day Window Fee</label>
-                        <span className="text-xs px-2 py-0.5 rounded font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">Follow-up</span>
+                        <label className="text-sm font-bold text-slate-800">Follow-up Fee</label>
+                        <span className="text-xs px-2 py-0.5 rounded font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">Within {state.settings.followUpFreeDays || 7}d</span>
                       </div>
-                      <p className="text-xs text-slate-500 mb-3">Charged within the 7-day follow-up window. Set to <strong>0 for completely FREE</strong>.</p>
+                      <p className="text-xs text-slate-500 mb-3">Charged within the 7-day follow-up window. Set to <strong>0 for FREE</strong>.</p>
                     </div>
                     <div className="relative mt-2">
                       <span className="absolute left-3.5 top-2.5 text-slate-400 font-bold text-base">₹</span>
@@ -689,9 +701,30 @@ export default function SettingsPage() {
                     </div>
                   </div>
 
-                  <div className="md:col-span-2 bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+                  <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-sm font-bold text-slate-800">Same Concern Fee</label>
+                        <span className="text-xs px-2 py-0.5 rounded font-semibold bg-amber-50 text-amber-700 border border-amber-200">Post-Window</span>
+                      </div>
+                      <p className="text-xs text-slate-500 mb-3">Charged for returning patients with the <strong>same concern</strong> after follow-up window.</p>
+                    </div>
+                    <div className="relative mt-2">
+                      <span className="absolute left-3.5 top-2.5 text-slate-400 font-bold text-base">₹</span>
+                      <input 
+                        type="number" 
+                        value={state.settings.sameConcernFee !== undefined ? state.settings.sameConcernFee / 100 : (state.settings.consultationFee !== undefined ? state.settings.consultationFee / 100 : 199)} 
+                        onChange={e => updateSettings({ sameConcernFee: (parseFloat(e.target.value) || 0) * 100 })} 
+                        className="w-full pl-9 pr-4 py-2.5 border border-slate-200 rounded-lg text-lg font-bold text-slate-800 focus:ring-2 focus:ring-indigo-500 outline-none" 
+                        placeholder="199"
+                        min="0"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="md:col-span-3 bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
                     <label className="block text-sm font-bold text-slate-800 mb-1">Follow-up Window Period (Days)</label>
-                    <p className="text-xs text-slate-500 mb-3">How many days after a previous consultation/clinic visit the patient qualifies for the follow-up rate.</p>
+                    <p className="text-xs text-slate-500 mb-3">How many days after a previous consultation the patient qualifies for the free/follow-up rate.</p>
                     <div className="flex items-center gap-3">
                       <input 
                         type="number" 
@@ -701,16 +734,16 @@ export default function SettingsPage() {
                         placeholder="7"
                         min="1"
                       />
-                      <span className="text-sm text-slate-600 font-medium">days from last visit</span>
+                      <span className="text-sm text-slate-600 font-medium">days from last paid consultation</span>
                     </div>
                   </div>
                 </div>
 
                 <div className="bg-indigo-50 border border-indigo-100 p-5 rounded-xl">
                   <h4 className="font-bold text-indigo-950 text-sm mb-2">Live Pricing Summary:</h4>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
                     <div className="bg-white p-3 rounded-lg border border-indigo-100">
-                      <span className="text-xs text-slate-500 block">Normal Appointment</span>
+                      <span className="text-xs text-slate-500 block">Normal / New Case</span>
                       <span className="text-lg font-extrabold text-slate-800">
                         ₹{(state.settings.consultationFee !== undefined ? state.settings.consultationFee / 100 : 199)}
                       </span>
@@ -719,6 +752,12 @@ export default function SettingsPage() {
                       <span className="text-xs text-slate-500 block">Within {state.settings.followUpFreeDays || 7}-Day Window</span>
                       <span className="text-lg font-extrabold text-emerald-700">
                         {((state.settings.followUpFee || 0) === 0 ? 'FREE (₹0)' : '₹' + ((state.settings.followUpFee || 0) / 100))}
+                      </span>
+                    </div>
+                    <div className="bg-white p-3 rounded-lg border border-indigo-100">
+                      <span className="text-xs text-slate-500 block">Same Concern (Post-Window)</span>
+                      <span className="text-lg font-extrabold text-amber-700">
+                        ₹{(state.settings.sameConcernFee !== undefined ? state.settings.sameConcernFee / 100 : (state.settings.consultationFee !== undefined ? state.settings.consultationFee / 100 : 199))}
                       </span>
                     </div>
                   </div>

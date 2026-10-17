@@ -120,10 +120,12 @@ export default function BookAppointment() {
   const [pricingConfig, setPricingConfig] = useState<{
     normalFee: number;
     followUpFee: number;
+    sameConcernFee: number;
     followUpDays: number;
   }>({
     normalFee: 199,
     followUpFee: 0,
+    sameConcernFee: 199,
     followUpDays: 7,
   });
 
@@ -153,8 +155,26 @@ export default function BookAppointment() {
 
   const isFollowUpEligible = selectedProfile?.isFollowUpEligible === true;
   const isFollowUp = isFollowUpEligible && formData.isSameConcern !== false;
-  const effectiveFee = isFollowUp ? pricingConfig.followUpFee : pricingConfig.normalFee;
+  const isSameConcernPostWindow = !isFollowUpEligible && formData.isSameConcern === true && Boolean(selectedProfile?.lastHealthConcern);
+
+  const effectiveFee = isFollowUp 
+    ? pricingConfig.followUpFee 
+    : (isSameConcernPostWindow 
+        ? (pricingConfig.sameConcernFee ?? pricingConfig.normalFee)
+        : pricingConfig.normalFee);
+
   const isFree = isFollowUp && pricingConfig.followUpFee === 0;
+
+  // Maximum allowed appointment date for follow-ups (strictly within follow-up window from last consultation)
+  const maxFollowUpDate = useMemo(() => {
+    if (!isFollowUp || !selectedProfile?.lastVisitDate) return null;
+    try {
+      const base = parseISO(selectedProfile.lastVisitDate.substring(0, 10));
+      return addDays(base, pricingConfig.followUpDays);
+    } catch {
+      return null;
+    }
+  }, [isFollowUp, selectedProfile?.lastVisitDate, pricingConfig.followUpDays]);
 
   // ---------------------------------------------------------------
   // HELPERS
@@ -222,6 +242,7 @@ export default function BookAppointment() {
         setPricingConfig({
           normalFee: data.normalFee ?? 199,
           followUpFee: data.followUpFee ?? 0,
+          sameConcernFee: data.sameConcernFee ?? data.normalFee ?? 199,
           followUpDays: data.followUpDays ?? 7,
         });
       }
@@ -315,8 +336,8 @@ export default function BookAppointment() {
       }
     }
 
-    // Follow-up decision required if eligible
-    if (isFollowUpEligible && selectedProfile?.lastHealthConcern && formData.isSameConcern === undefined) {
+    // Follow-up / concern decision required if returning patient has recorded concern
+    if (selectedProfile?.lastHealthConcern && formData.isSameConcern === undefined) {
       return 'Please choose whether this consultation is for the same health concern or a new case.';
     }
 
@@ -340,8 +361,8 @@ export default function BookAppointment() {
     if (!formData.courierPhone) {
       updateForm('courierPhone', formData.phone);
     }
-    // Prefill health concern if follow-up same concern
-    if (isFollowUp && selectedProfile?.lastHealthConcern) {
+    // Prefill health concern if same concern selected
+    if (formData.isSameConcern === true && selectedProfile?.lastHealthConcern) {
       updateForm('healthConcern', selectedProfile.lastHealthConcern);
       if (selectedProfile.lastHealthConcernDetail) {
         updateForm('healthConcernOther', selectedProfile.lastHealthConcernDetail);
@@ -435,9 +456,9 @@ export default function BookAppointment() {
           email: formData.email,
           patientType: formData.isExisting ? 'existing' : 'new',
           shortAddress: formData.shortAddress,
-          lastVisitDate: formData.lastVisitDate,
+          lastVisitDate: formData.lastVisitDate || selectedProfile?.lastVisitDate || undefined,
           pid: formData.pid || undefined,
-          isSameConcern: formData.isSameConcern !== false,
+          isSameConcern: formData.isSameConcern === true ? true : (formData.isSameConcern === false ? false : undefined),
           healthConcern: formData.healthConcern === 'Other' ? 'Other' : formData.healthConcern,
           healthConcernDetail: formData.healthConcernOther,
           wantsCourierMedicine: formData.needsCourier,
@@ -550,16 +571,35 @@ export default function BookAppointment() {
   // ---------------------------------------------------------------
   // Generate next 30 days
   const today = new Date();
+  const maxFollowUpDateStr = maxFollowUpDate ? format(maxFollowUpDate, 'yyyy-MM-dd') : null;
+
   const dateOptions = Array.from({ length: 30 }).map((_, i) => {
     const d = addDays(today, i);
+    const dateStr = format(d, 'yyyy-MM-dd');
+    const isPastFollowUp = Boolean(maxFollowUpDateStr && dateStr > maxFollowUpDateStr);
+    const isWednesday = getDay(d) === 3; // Wednesday = 3
     return {
       date: d,
-      dateStr: format(d, 'yyyy-MM-dd'),
+      dateStr,
       dayName: format(d, 'EEE'),
       dayNum: format(d, 'd'),
-      isClosed: getDay(d) === 3 // Wednesday = 3
+      isPastFollowUp,
+      isClosed: isWednesday || isPastFollowUp
     };
   });
+
+  // Ensure selected date in Step 4 is valid (open and within follow-up window)
+  useEffect(() => {
+    if (step === 4) {
+      const isValid = dateOptions.find(o => o.dateStr === formData.appointmentDate && !o.isClosed);
+      if (!isValid) {
+        const firstAvailable = dateOptions.find(o => !o.isClosed);
+        if (firstAvailable) {
+          updateForm('appointmentDate', firstAvailable.dateStr);
+        }
+      }
+    }
+  }, [step, maxFollowUpDateStr]);
 
   const fetchSlots = async (dateStr: string) => {
     setLoading(true);
@@ -932,20 +972,34 @@ END:VCALENDAR`;
                         </div>
                       </div>
 
-                      {/* -------- FOLLOW-UP DECISION (only if selected profile is eligible) -------- */}
-                      {isFollowUpEligible && selectedProfile?.lastHealthConcern && (
-                        <div className="bg-emerald-50 border-2 border-emerald-300 rounded-2xl p-4 sm:p-5 space-y-4 shadow-xs">
+                      {/* -------- RETURNING PATIENT CONCERN & PRICING DECISION -------- */}
+                      {selectedProfile?.lastHealthConcern && (
+                        <div className={`border-2 rounded-2xl p-4 sm:p-5 space-y-4 shadow-xs ${
+                          isFollowUpEligible 
+                            ? 'bg-emerald-50 border-emerald-300' 
+                            : 'bg-teal-50/70 border-teal-200'
+                        }`}>
                           <div className="flex items-start gap-3">
-                            <div className="p-2.5 bg-emerald-100 rounded-xl text-emerald-800 mt-0.5 flex-shrink-0">
+                            <div className={`p-2.5 rounded-xl mt-0.5 flex-shrink-0 ${
+                              isFollowUpEligible 
+                                ? 'bg-emerald-100 text-emerald-800' 
+                                : 'bg-teal-100 text-teal-800'
+                            }`}>
                               <Sparkles className="w-5 h-5" />
                             </div>
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-2 flex-wrap">
-                                <span className="text-xs font-bold uppercase tracking-wider bg-emerald-200 text-emerald-900 px-2 py-0.5 rounded">
-                                  {pricingConfig.followUpDays}-Day Follow-Up Window
-                                </span>
+                                {isFollowUpEligible ? (
+                                  <span className="text-xs font-bold uppercase tracking-wider bg-emerald-200 text-emerald-900 px-2 py-0.5 rounded">
+                                    {pricingConfig.followUpDays}-Day Follow-Up Window Active
+                                  </span>
+                                ) : (
+                                  <span className="text-xs font-bold uppercase tracking-wider bg-teal-200 text-teal-900 px-2 py-0.5 rounded">
+                                    Returning Patient Consultation
+                                  </span>
+                                )}
                                 {formData.pid && (
-                                  <span className="text-xs font-mono font-semibold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded">
+                                  <span className="text-xs font-mono font-semibold bg-white/80 text-slate-800 px-2 py-0.5 rounded border border-slate-200">
                                     PID: {formData.pid}
                                   </span>
                                 )}
@@ -953,18 +1007,20 @@ END:VCALENDAR`;
                               <h3 className="font-bold text-slate-900 mt-2 text-sm sm:text-base">
                                 Your last completed consultation was on {formatDateSafe(selectedProfile.lastVisitDate)} for:
                               </h3>
-                              <p className="text-sm text-emerald-950 mt-1 font-bold">
+                              <p className="text-sm text-teal-950 mt-1 font-bold">
                                 "{selectedProfile.lastHealthConcern}"
                                 {selectedProfile.lastHealthConcernDetail ? ` (${selectedProfile.lastHealthConcernDetail})` : ''}
                               </p>
                               <p className="text-xs text-slate-600 mt-2">
-                                Is this appointment regarding the <strong>same recorded concern</strong> or a <strong>new case</strong> for a different concern?
+                                {isFollowUpEligible 
+                                  ? 'Is this appointment regarding the same recorded concern or a new case for a different concern?'
+                                  : `The ${pricingConfig.followUpDays}-day free follow-up window has elapsed. Is this consultation for the same health concern or a new case?`}
                               </p>
                             </div>
                           </div>
 
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                            {/* Same Concern */}
+                            {/* Same Concern Option */}
                             <button
                               type="button"
                               onClick={() => {
@@ -974,27 +1030,35 @@ END:VCALENDAR`;
                               }}
                               className={`p-3.5 rounded-xl border-2 text-left transition-all flex flex-col justify-between ${
                                 formData.isSameConcern === true
-                                  ? 'border-emerald-600 bg-white shadow-sm ring-1 ring-emerald-600'
-                                  : 'border-emerald-200 bg-emerald-100/40 hover:bg-white'
+                                  ? (isFollowUpEligible ? 'border-emerald-600 bg-white shadow-sm ring-1 ring-emerald-600' : 'border-teal-600 bg-white shadow-sm ring-1 ring-teal-600')
+                                  : 'border-slate-200 bg-white/60 hover:bg-white'
                               }`}
                             >
                               <div className="flex items-center justify-between">
-                                <span className="text-xs sm:text-sm font-bold text-emerald-950 flex items-center gap-2">
-                                  <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${formData.isSameConcern === true ? 'border-emerald-600 bg-emerald-600' : 'border-slate-400'}`}>
+                                <span className="text-xs sm:text-sm font-bold text-slate-900 flex items-center gap-2">
+                                  <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${formData.isSameConcern === true ? (isFollowUpEligible ? 'border-emerald-600 bg-emerald-600' : 'border-teal-600 bg-teal-600') : 'border-slate-400'}`}>
                                     {formData.isSameConcern === true && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
                                   </span>
-                                  Same Recorded Concern
+                                  {isFollowUpEligible ? 'Same Recorded Concern' : 'Same Health Concern'}
                                 </span>
-                                <span className="text-xs font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-full border border-emerald-200">
-                                  {pricingConfig.followUpFee === 0 ? 'FREE' : `₹${pricingConfig.followUpFee}`}
+                                <span className={`text-xs font-bold px-2 py-0.5 rounded-full border ${
+                                  isFollowUpEligible 
+                                    ? 'text-emerald-800 bg-emerald-100 border-emerald-200' 
+                                    : 'text-teal-800 bg-teal-100 border-teal-200'
+                                }`}>
+                                  {isFollowUpEligible 
+                                    ? (pricingConfig.followUpFee === 0 ? 'FREE' : `₹${pricingConfig.followUpFee}`)
+                                    : `₹${pricingConfig.sameConcernFee ?? pricingConfig.normalFee}`}
                                 </span>
                               </div>
                               <p className="text-[11px] text-slate-600 mt-2 pl-6">
-                                Follow-up window fee applies. Concern will be prefilled and locked.
+                                {isFollowUpEligible 
+                                  ? 'Within follow-up window. Concern will be prefilled and locked.'
+                                  : 'Special post-window returning fee. Concern will be prefilled and locked.'}
                               </p>
                             </button>
 
-                            {/* Different Concern */}
+                            {/* Different Concern Option */}
                             <button
                               type="button"
                               onClick={() => {
@@ -1004,13 +1068,13 @@ END:VCALENDAR`;
                               }}
                               className={`p-3.5 rounded-xl border-2 text-left transition-all flex flex-col justify-between ${
                                 formData.isSameConcern === false
-                                  ? 'border-teal-600 bg-white shadow-sm ring-1 ring-teal-600'
-                                  : 'border-emerald-200 bg-emerald-100/40 hover:bg-white'
+                                  ? 'border-slate-700 bg-white shadow-sm ring-1 ring-slate-700'
+                                  : 'border-slate-200 bg-white/60 hover:bg-white'
                               }`}
                             >
                               <div className="flex items-center justify-between">
                                 <span className="text-xs sm:text-sm font-bold text-slate-900 flex items-center gap-2">
-                                  <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${formData.isSameConcern === false ? 'border-teal-600 bg-teal-600' : 'border-slate-400'}`}>
+                                  <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${formData.isSameConcern === false ? 'border-slate-800 bg-slate-800' : 'border-slate-400'}`}>
                                     {formData.isSameConcern === false && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
                                   </span>
                                   New Case / Different Concern
@@ -1020,7 +1084,7 @@ END:VCALENDAR`;
                                 </span>
                               </div>
                               <p className="text-[11px] text-slate-600 mt-2 pl-6">
-                                Standard fee, booked on existing PID ({formData.pid || 'record'}).
+                                Standard consultation fee, booked on existing PID ({formData.pid || 'record'}).
                               </p>
                             </button>
                           </div>
@@ -1111,18 +1175,18 @@ END:VCALENDAR`;
                   <div>
                     <div className="flex items-center justify-between mb-2">
                       <label className="block text-sm font-medium text-slate-700">Primary Health Concern *</label>
-                      {isFollowUp && selectedProfile?.lastHealthConcern && (
-                        <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-800 bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded-md">
-                          <Lock className="w-3 h-3 text-emerald-700" /> Locked to Previous Concern
+                      {formData.isSameConcern === true && selectedProfile?.lastHealthConcern && (
+                        <span className="inline-flex items-center gap-1 text-xs font-semibold text-teal-800 bg-teal-100 border border-teal-300 px-2 py-0.5 rounded-md">
+                          <Lock className="w-3 h-3 text-teal-700" /> Locked to Recorded Concern
                         </span>
                       )}
                     </div>
                     <select 
                       value={formData.healthConcern || ''} 
                       onChange={e => updateForm('healthConcern', e.target.value)}
-                      disabled={isFollowUp && Boolean(selectedProfile?.lastHealthConcern)}
+                      disabled={formData.isSameConcern === true && Boolean(selectedProfile?.lastHealthConcern)}
                       className={`w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 ${
-                        isFollowUp && Boolean(selectedProfile?.lastHealthConcern) ? 'opacity-85 bg-slate-100 cursor-not-allowed text-slate-800 font-semibold' : ''
+                        formData.isSameConcern === true && Boolean(selectedProfile?.lastHealthConcern) ? 'opacity-85 bg-slate-100 cursor-not-allowed text-slate-800 font-semibold' : ''
                       }`}
                     >
                       <option value="">Select a concern...</option>
@@ -1130,16 +1194,16 @@ END:VCALENDAR`;
                     </select>
                   </div>
 
-                  {(formData.healthConcern === 'Other' || (isFollowUp && selectedProfile?.lastHealthConcern === 'Other')) && (
+                  {(formData.healthConcern === 'Other' || (formData.isSameConcern === true && selectedProfile?.lastHealthConcern === 'Other')) && (
                     <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}>
                       <label className="block text-sm font-medium text-slate-700 mb-1">Describe Concern *</label>
                       <textarea 
                         value={formData.healthConcernOther} 
                         onChange={e => updateForm('healthConcernOther', e.target.value)}
-                        disabled={isFollowUp && Boolean(selectedProfile?.lastHealthConcern)}
+                        disabled={formData.isSameConcern === true && Boolean(selectedProfile?.lastHealthConcern)}
                         rows={3} 
                         className={`w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 resize-none ${
-                          isFollowUp && Boolean(selectedProfile?.lastHealthConcern) ? 'opacity-85 bg-slate-100 cursor-not-allowed text-slate-800' : ''
+                          formData.isSameConcern === true && Boolean(selectedProfile?.lastHealthConcern) ? 'opacity-85 bg-slate-100 cursor-not-allowed text-slate-800' : ''
                         }`}
                         placeholder="Briefly describe your symptoms..."
                       />
@@ -1293,9 +1357,11 @@ END:VCALENDAR`;
                     <p className="text-sm text-teal-700 mt-1">
                       {isFollowUp 
                         ? `Follow-up consultation within ${pricingConfig.followUpDays}-day window (Same Concern)` 
-                        : (formData.isSameConcern === false
-                            ? `Standard consultation (New case - Linked to PID ${formData.pid || 'record'})`
-                            : 'Standard online video consultation')}
+                        : (isSameConcernPostWindow
+                            ? `Consultation for same health concern (Post follow-up window - Linked to PID ${formData.pid || 'record'})`
+                            : (formData.isSameConcern === false
+                                ? `Standard consultation (New case - Linked to PID ${formData.pid || 'record'})`
+                                : 'Standard online video consultation'))}
                     </p>
                   </div>
                   <div className="text-right">
@@ -1338,6 +1404,20 @@ END:VCALENDAR`;
 
                 {error && <div className="mb-6 p-3 bg-rose-50 text-rose-600 border border-rose-200 rounded-xl text-sm">{error}</div>}
 
+                {/* Follow-up Window Restriction Banner */}
+                {isFollowUp && maxFollowUpDate && (
+                  <div className="mb-6 p-4 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-start gap-3">
+                    <Sparkles className="w-5 h-5 text-emerald-700 flex-shrink-0 mt-0.5" />
+                    <div>
+                      <h4 className="text-sm font-bold text-emerald-950">Follow-Up Window Active</h4>
+                      <p className="text-xs text-emerald-800 mt-0.5 leading-relaxed">
+                        To receive this consultation under the {pricingConfig.followUpDays}-day follow-up policy, your appointment must take place on or before{' '}
+                        <strong>{format(maxFollowUpDate, 'MMMM d, yyyy')}</strong> ({pricingConfig.followUpDays} days from your previous consultation on {formatDateSafe(selectedProfile?.lastVisitDate)}). Future dates past this window are disabled.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
                 {/* Date Selection Horizontal Scroll */}
                 <div className="mb-8">
                   <label className="block text-sm font-semibold text-slate-700 mb-3">Select Date</label>
@@ -1348,6 +1428,7 @@ END:VCALENDAR`;
                         <button
                           key={i}
                           disabled={opt.isClosed}
+                          title={opt.isPastFollowUp ? `Disabled: Past ${pricingConfig.followUpDays}-day follow-up window` : opt.isClosed ? 'Clinic closed on Wednesdays' : undefined}
                           onClick={() => updateForm('appointmentDate', opt.dateStr)}
                           className={`flex-shrink-0 snap-center flex flex-col items-center justify-center w-16 h-20 rounded-2xl border transition-all ${
                             opt.isClosed 

@@ -2224,12 +2224,14 @@ app.post('/api/appointments/profiles-by-phone', async (req, res) => {
     const s = await getAppointmentSettings();
     const normalFeePaise = s.consultation_fee !== undefined && s.consultation_fee !== null ? s.consultation_fee : 19900;
     const followUpFeePaise = s.follow_up_fee !== undefined && s.follow_up_fee !== null ? s.follow_up_fee : 0;
+    const sameConcernFeePaise = s.same_concern_fee !== undefined && s.same_concern_fee !== null ? s.same_concern_fee : normalFeePaise;
     const followUpDays = s.follow_up_free_days !== undefined && s.follow_up_free_days !== null ? s.follow_up_free_days : 7;
     const normalFee = normalFeePaise / 100;
     const followUpFee = followUpFeePaise / 100;
+    const sameConcernFee = sameConcernFeePaise / 100;
 
     if (cleanPhone.length !== 10) {
-      return res.json({ profiles: [], followUpDays, normalFee, followUpFee });
+      return res.json({ profiles: [], followUpDays, normalFee, followUpFee, sameConcernFee });
     }
 
     const [registryPatients]: any = await pool.query(
@@ -2398,7 +2400,8 @@ app.post('/api/appointments/profiles-by-phone', async (req, res) => {
       profiles,
       followUpDays,
       normalFee,
-      followUpFee
+      followUpFee,
+      sameConcernFee
     });
   } catch (error: any) {
     console.error('Error fetching profiles by phone:', error);
@@ -2412,6 +2415,7 @@ app.get('/api/appointments/config', async (req, res) => {
     const s = await getAppointmentSettings();
     const normalFeePaise = s.consultation_fee !== undefined && s.consultation_fee !== null ? s.consultation_fee : 19900;
     const followUpFeePaise = s.follow_up_fee !== undefined && s.follow_up_fee !== null ? s.follow_up_fee : 0;
+    const sameConcernFeePaise = s.same_concern_fee !== undefined && s.same_concern_fee !== null ? s.same_concern_fee : normalFeePaise;
     const followUpDays = s.follow_up_free_days !== undefined && s.follow_up_free_days !== null ? s.follow_up_free_days : 7;
 
     const rawPhone = (req.query.phone as string) || '';
@@ -2486,11 +2490,18 @@ app.get('/api/appointments/config', async (req, res) => {
       }
     }
 
-    const calculatedFeePaise = isFollowUp ? followUpFeePaise : normalFeePaise;
+    const isSameConcernQuery = req.query.isSameConcern === 'true';
+    let calculatedFeePaise = normalFeePaise;
+    if (isFollowUp) {
+      calculatedFeePaise = followUpFeePaise;
+    } else if (isSameConcernQuery && (followUpDetails?.lastHealthConcern || pid)) {
+      calculatedFeePaise = sameConcernFeePaise;
+    }
 
     res.json({
       normalFee: normalFeePaise / 100,
       followUpFee: followUpFeePaise / 100,
+      sameConcernFee: sameConcernFeePaise / 100,
       followUpDays,
       isFollowUp,
       calculatedFee: calculatedFeePaise / 100,
@@ -2585,6 +2596,7 @@ app.post('/api/appointments/create-order', async (req, res) => {
     
     const normalFeePaise = s.consultation_fee !== undefined && s.consultation_fee !== null ? s.consultation_fee : 19900;
     const followUpFeePaise = s.follow_up_fee !== undefined && s.follow_up_fee !== null ? s.follow_up_fee : 0;
+    const sameConcernFeePaise = s.same_concern_fee !== undefined && s.same_concern_fee !== null ? s.same_concern_fee : normalFeePaise;
 
     let isFollowUp = false;
     let fee = normalFeePaise;
@@ -2594,14 +2606,14 @@ app.post('/api/appointments/create-order', async (req, res) => {
 
     if (eligibility.isEligible) {
       if (isSameConcern !== false) {
-        // YES: Same health concern -> Prefill concern, follow-up window fee
+        // Tier 1: Same health concern within follow-up window
         isFollowUp = true;
         fee = followUpFeePaise;
         finalHealthConcern = eligibility.lastHealthConcern || healthConcern;
         finalHealthConcernDetail = eligibility.lastHealthConcernDetail || healthConcernDetail;
         if (!clinicId && eligibility.clinicId) clinicId = eligibility.clinicId;
       } else {
-        // NO: Different health concern -> Continue as normal appointment, book on previous PID
+        // Tier 3: Different health concern within window -> Normal consultation fee
         isFollowUp = false;
         fee = normalFeePaise;
         finalHealthConcern = healthConcern;
@@ -2609,8 +2621,19 @@ app.post('/api/appointments/create-order', async (req, res) => {
         if (!clinicId && eligibility.clinicId) clinicId = eligibility.clinicId;
       }
     } else {
-      isFollowUp = false;
-      fee = normalFeePaise;
+      // Outside follow-up window
+      if (isSameConcern === true && (eligibility.lastHealthConcern || eligibility.lastDate || pid)) {
+        // Tier 2: Same health concern post follow-up window -> Special same concern fee
+        isFollowUp = false;
+        fee = sameConcernFeePaise;
+        finalHealthConcern = eligibility.lastHealthConcern || healthConcern;
+        finalHealthConcernDetail = eligibility.lastHealthConcernDetail || healthConcernDetail;
+        if (!clinicId && eligibility.clinicId) clinicId = eligibility.clinicId;
+      } else {
+        // Tier 3: Standard normal consultation fee
+        isFollowUp = false;
+        fee = normalFeePaise;
+      }
     }
 
     // If still no clinicId, check patient_registry for this patientName & phone
@@ -2622,12 +2645,13 @@ app.post('/api/appointments/create-order', async (req, res) => {
       if (regRows.length > 0) clinicId = regRows[0].clinic_id;
     }
 
+    const effectiveLastVisitDate = lastVisitDate || eligibility.lastDate || null;
     const isFree = fee === 0;
     const appointmentId = 'APT-' + crypto.randomUUID().substring(0, 8);
     
     await pool.query(
       `INSERT INTO online_appointments (id, patient_name, age, gender, phone, email, patient_type, short_address, last_visit_date, clinic_id, health_concern, health_concern_detail, wants_courier_medicine, courier_address, courier_contact, courier_pincode, payment_amount, payment_status, is_follow_up_free, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_slot', NOW())`,
-      [appointmentId, patientName, finalAge, finalGender, phone, email, patientType, shortAddress || null, lastVisitDate || null, clinicId || null, finalHealthConcern, finalHealthConcernDetail || null, wantsCourierMedicine || false, courierAddress || null, courierContact || phone, courierPincode || null, fee, isFree ? 'paid' : 'pending', isFollowUp]
+      [appointmentId, patientName, finalAge, finalGender, phone, email, patientType, shortAddress || null, effectiveLastVisitDate, clinicId || null, finalHealthConcern, finalHealthConcernDetail || null, wantsCourierMedicine || false, courierAddress || null, courierContact || phone, courierPincode || null, fee, isFree ? 'paid' : 'pending', isFollowUp]
     );
     
     if (isFree) {
@@ -2780,6 +2804,28 @@ app.post('/api/appointments/book-slot', async (req, res) => {
     const apt = aptRows[0];
     if (apt.payment_status !== 'paid') return res.status(400).json({ error: 'Payment not completed' });
     if (apt.appointment_date && apt.time_slot) return res.status(400).json({ error: 'Slot already booked' });
+    
+    // Enforce follow-up date boundary: follow-up cannot be booked past followUpFreeDays from previous consultation
+    if (apt.is_follow_up_free) {
+      const s = await getAppointmentSettings();
+      const freeDays = s.follow_up_free_days !== undefined && s.follow_up_free_days !== null ? s.follow_up_free_days : 7;
+      let lastVisit = apt.last_visit_date;
+      if (!lastVisit) {
+        const elig = await checkFollowUpEligibility(apt.phone, freeDays, '', apt.patient_name, apt.clinic_id);
+        lastVisit = elig.lastDate;
+      }
+      if (lastVisit) {
+        const lastVisitStr = lastVisit instanceof Date ? lastVisit.toISOString().split('T')[0] : String(lastVisit).split('T')[0];
+        const maxDate = new Date(lastVisitStr + 'T00:00:00Z');
+        maxDate.setUTCDate(maxDate.getUTCDate() + freeDays);
+        const maxDateStr = maxDate.toISOString().split('T')[0];
+        if (date > maxDateStr) {
+          return res.status(400).json({ 
+            error: `Follow-up appointments must be scheduled within ${freeDays} days of your previous consultation (${lastVisitStr}). The latest date allowed for this follow-up is ${maxDateStr}.` 
+          });
+        }
+      }
+    }
     
     // Check slot availability (race-condition safe)
     const [existing]: any = await pool.query(
@@ -3031,9 +3077,11 @@ app.post('/api/appointments/lookup', async (req, res) => {
       if (regRows.length > 0) clinicId = regRows[0].clinic_id;
     }
 
+    const s = await getAppointmentSettings();
+    const followUpDays = s.follow_up_free_days !== undefined && s.follow_up_free_days !== null ? s.follow_up_free_days : 7;
     const today = new Date().toISOString().split('T')[0];
     const [rows]: any = await pool.query(
-      `SELECT id, patient_name, email, clinic_id, appointment_date, time_slot, health_concern, status, meet_link 
+      `SELECT id, patient_name, email, clinic_id, appointment_date, time_slot, health_concern, status, meet_link, is_follow_up_free, last_visit_date 
        FROM online_appointments 
        WHERE (id = ? OR (phone = ? AND phone != '') OR (clinic_id IS NOT NULL AND clinic_id != '' AND clinic_id = ?)) 
          AND (appointment_date >= ? OR appointment_date IS NULL) 
@@ -3050,11 +3098,14 @@ app.post('/api/appointments/lookup', async (req, res) => {
       return {
         appointmentId: r.id, patientName: r.patient_name, maskedEmail,
         date: r.appointment_date, timeSlot: r.time_slot,
-        healthConcern: r.health_concern, status: r.status, clinicId: r.clinic_id
+        healthConcern: r.health_concern, status: r.status, clinicId: r.clinic_id,
+        isFollowUpFree: Boolean(r.is_follow_up_free),
+        lastVisitDate: r.last_visit_date,
+        followUpDays
       };
     });
     
-    res.json({ appointments, clinicId });
+    res.json({ appointments, clinicId, followUpDays });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -3152,6 +3203,28 @@ app.post('/api/appointments/reschedule/confirm', async (req, res) => {
     const [aptRows]: any = await pool.query('SELECT * FROM online_appointments WHERE id = ?', [appointmentId]);
     if (aptRows.length === 0) return res.status(404).json({ error: 'Appointment not found' });
     const apt = aptRows[0];
+
+    // Enforce follow-up date boundary: follow-up cannot be rescheduled past followUpFreeDays from previous consultation
+    if (apt.is_follow_up_free) {
+      const s = await getAppointmentSettings();
+      const freeDays = s.follow_up_free_days !== undefined && s.follow_up_free_days !== null ? s.follow_up_free_days : 7;
+      let lastVisit = apt.last_visit_date;
+      if (!lastVisit) {
+        const elig = await checkFollowUpEligibility(apt.phone, freeDays, '', apt.patient_name, apt.clinic_id);
+        lastVisit = elig.lastDate;
+      }
+      if (lastVisit) {
+        const lastVisitStr = lastVisit instanceof Date ? lastVisit.toISOString().split('T')[0] : String(lastVisit).split('T')[0];
+        const maxDate = new Date(lastVisitStr + 'T00:00:00Z');
+        maxDate.setUTCDate(maxDate.getUTCDate() + freeDays);
+        const maxDateStr = maxDate.toISOString().split('T')[0];
+        if (newDate > maxDateStr) {
+          return res.status(400).json({ 
+            error: `Follow-up appointments must be scheduled within ${freeDays} days of your previous consultation (${lastVisitStr}). The latest allowed date for this follow-up is ${maxDateStr}.` 
+          });
+        }
+      }
+    }
     
     // Enforce 1-hour-prior policy
     if (apt.appointment_date && apt.time_slot) {

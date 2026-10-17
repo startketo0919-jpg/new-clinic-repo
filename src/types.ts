@@ -106,6 +106,7 @@ export interface ClinicState {
     notificationEmails?: string;
     followUpFreeDays?: number;
     followUpFee?: number;
+    sameConcernFee?: number;
   };
   templates: WhatsAppTemplate[];
 }

@@ -205,6 +205,7 @@ export async function initDb() {
     `ALTER TABLE settings ADD COLUMN IF NOT EXISTS notification_emails TEXT;`,
     `ALTER TABLE settings ADD COLUMN IF NOT EXISTS follow_up_free_days INT DEFAULT 7;`,
     `ALTER TABLE settings ADD COLUMN IF NOT EXISTS follow_up_fee INT DEFAULT 0;`,
+    `ALTER TABLE settings ADD COLUMN IF NOT EXISTS same_concern_fee INT DEFAULT 19900;`,
     `ALTER TABLE online_appointments ADD COLUMN IF NOT EXISTS age INT;`,
     `ALTER TABLE online_appointments ADD COLUMN IF NOT EXISTS gender VARCHAR(20);`,
     `ALTER TABLE patient_registry ADD COLUMN IF NOT EXISTS last_paid_visit TIMESTAMP NULL;`,

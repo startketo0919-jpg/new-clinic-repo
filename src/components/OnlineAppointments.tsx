@@ -71,6 +71,7 @@ export default function OnlineAppointments({ userRole, onAutofillDelhivery }: On
   const [feeSettings, setFeeSettings] = useState({
     normalFee: 199,
     followUpFee: 0,
+    sameConcernFee: 199,
     followUpDays: 7
   });
   const [savingFees, setSavingFees] = useState(false);
@@ -83,6 +84,7 @@ export default function OnlineAppointments({ userRole, onAutofillDelhivery }: On
         setFeeSettings({
           normalFee: data.normalFee ?? 199,
           followUpFee: data.followUpFee ?? 0,
+          sameConcernFee: data.sameConcernFee ?? data.normalFee ?? 199,
           followUpDays: data.followUpDays ?? 7
         });
       }
@@ -107,6 +109,7 @@ export default function OnlineAppointments({ userRole, onAutofillDelhivery }: On
           payload: {
             consultationFee: (feeSettings.normalFee || 0) * 100,
             followUpFee: (feeSettings.followUpFee || 0) * 100,
+            sameConcernFee: (feeSettings.sameConcernFee || 0) * 100,
             followUpFreeDays: feeSettings.followUpDays || 7
           }
         })
@@ -915,6 +918,23 @@ export default function OnlineAppointments({ userRole, onAutofillDelhivery }: On
               </div>
 
               <div>
+                <label className="block text-sm font-bold text-slate-800 mb-1">Same Concern (Post Follow-up) Fee (₹)</label>
+                <p className="text-xs text-slate-500 mb-2">Charged when a returning patient books for the <strong>same health concern after the follow-up window has passed</strong>.</p>
+                <div className="relative">
+                  <span className="absolute left-3 top-2.5 text-slate-400 font-bold">₹</span>
+                  <input 
+                    type="number"
+                    min="0"
+                    value={feeSettings.sameConcernFee}
+                    onChange={e => setFeeSettings(prev => ({ ...prev, sameConcernFee: parseFloat(e.target.value) || 0 }))}
+                    className="w-full pl-8 pr-4 py-2.5 border border-slate-200 rounded-xl text-base font-bold text-slate-800 focus:ring-2 focus:ring-indigo-500 outline-none"
+                    placeholder="199"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div>
                 <label className="block text-sm font-bold text-slate-800 mb-1">Follow-up Window (Days)</label>
                 <p className="text-xs text-slate-500 mb-2">Period after previous visit/appointment eligible for follow-up fee.</p>
                 <input 
@@ -929,8 +949,9 @@ export default function OnlineAppointments({ userRole, onAutofillDelhivery }: On
               </div>
 
               <div className="bg-indigo-50 border border-indigo-100 p-3.5 rounded-xl text-xs text-indigo-900 space-y-1">
-                <div>• Normal Fee: <strong>₹{feeSettings.normalFee}</strong></div>
-                <div>• Follow-up Fee ({feeSettings.followUpDays} days): <strong>{feeSettings.followUpFee === 0 ? 'FREE (₹0)' : `₹${feeSettings.followUpFee}`}</strong></div>
+                <div>• Tier 1 - Follow-up Fee ({feeSettings.followUpDays} days): <strong>{feeSettings.followUpFee === 0 ? 'FREE (₹0)' : `₹${feeSettings.followUpFee}`}</strong></div>
+                <div>• Tier 2 - Same Concern (Post-Window): <strong>₹{feeSettings.sameConcernFee}</strong></div>
+                <div>• Tier 3 - Standard / New Case: <strong>₹{feeSettings.normalFee}</strong></div>
               </div>
 
               <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">

@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Calendar, Clock, Phone, ShieldCheck, ArrowLeft, RefreshCw, CheckCircle2, ChevronRight, CalendarCheck, AlertCircle } from 'lucide-react';
-import { format, addDays, startOfToday, isSameDay } from 'date-fns';
+import { format, addDays, startOfToday, isSameDay, parseISO } from 'date-fns';
 
 type Appointment = {
   id: string;
@@ -12,6 +12,9 @@ type Appointment = {
   status: string;
   maskedEmail: string;
   clinicId?: string;
+  isFollowUpFree?: boolean;
+  lastVisitDate?: string;
+  followUpDays?: number;
 };
 
 type Slot = {
@@ -40,18 +43,33 @@ export default function RescheduleAppointment() {
   const [selectedSlot, setSelectedSlot] = useState('');
   const [availableDates, setAvailableDates] = useState<Date[]>([]);
 
+  // Follow-up deadline calculation (for appointments booked as free follow-ups)
+  const maxFollowUpDate = useMemo(() => {
+    if (!selectedAppointment?.isFollowUpFree || !selectedAppointment?.lastVisitDate) return null;
+    try {
+      const base = parseISO(selectedAppointment.lastVisitDate.substring(0, 10));
+      return addDays(base, selectedAppointment.followUpDays || 7);
+    } catch {
+      return null;
+    }
+  }, [selectedAppointment]);
+
   useEffect(() => {
-    // Generate dates for next 30 days, skipping Wednesdays (3)
-    const dates = [];
+    // Generate dates for next 30 days, skipping Wednesdays (3) and dates beyond follow-up deadline
+    const dates: Date[] = [];
     const today = startOfToday();
+    const maxDateStr = maxFollowUpDate ? format(maxFollowUpDate, 'yyyy-MM-dd') : null;
     for (let i = 0; i < 30; i++) {
       const d = addDays(today, i);
+      const dStr = format(d, 'yyyy-MM-dd');
       if (d.getDay() !== 3) {
-        dates.push(d);
+        if (!maxDateStr || dStr <= maxDateStr) {
+          dates.push(d);
+        }
       }
     }
     setAvailableDates(dates);
-  }, []);
+  }, [maxFollowUpDate]);
 
   const performLookup = async (lookupPhone: string, targetApptId?: string) => {
     setError('');
@@ -74,7 +92,10 @@ export default function RescheduleAppointment() {
             concern: a.healthConcern || a.concern,
             status: a.status,
             maskedEmail: a.maskedEmail,
-            clinicId: a.clinicId
+            clinicId: a.clinicId,
+            isFollowUpFree: Boolean(a.isFollowUpFree),
+            lastVisitDate: a.lastVisitDate,
+            followUpDays: a.followUpDays || data.followUpDays || 7
           }));
           setAppointments(mapped);
         } else {
@@ -406,6 +427,32 @@ export default function RescheduleAppointment() {
                   <h2 className="text-xl font-bold text-slate-800">Select New Time</h2>
                   <p className="text-sm text-slate-500 mt-1">Rescheduling appointment from {format(new Date(selectedAppointment.date), 'MMM d')} at {selectedAppointment.timeSlot}</p>
                 </div>
+
+                {/* Follow-up Reschedule Deadline Banner */}
+                {selectedAppointment.isFollowUpFree && maxFollowUpDate && (
+                  <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-xl flex items-start gap-3">
+                    <AlertCircle className="w-5 h-5 text-emerald-700 shrink-0 mt-0.5" />
+                    <div>
+                      <h4 className="text-sm font-bold text-emerald-950">Follow-Up Reschedule Window</h4>
+                      <p className="text-xs text-emerald-800 mt-0.5 leading-relaxed">
+                        This is a follow-up consultation. Follow-up appointments must take place on or before{' '}
+                        <strong>{format(maxFollowUpDate, 'MMMM d, yyyy')}</strong> ({selectedAppointment.followUpDays || 7} days from your previous consultation on {selectedAppointment.lastVisitDate || 'record'}). Dates past this deadline cannot be selected.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {availableDates.length === 0 && (
+                  <div className="bg-amber-50 border border-amber-200 text-amber-800 text-sm p-4 rounded-xl flex items-start gap-3">
+                    <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
+                    <div>
+                      <strong className="block font-semibold">Follow-Up Window Expired</strong>
+                      <p className="text-xs mt-1 leading-relaxed">
+                        The allowed {selectedAppointment.followUpDays || 7}-day window for this follow-up appointment has expired. Under clinic policy, follow-up slots cannot be rescheduled beyond this window. Please book a fresh consultation.
+                      </p>
+                    </div>
+                  </div>
+                )}
 
                 <div className="flex flex-col gap-4">
                   {/* Date Picker (Horizontal Scroll) */}

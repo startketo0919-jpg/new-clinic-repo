@@ -87,6 +87,7 @@ export const settings = mysqlTable("settings", {
   notificationEmails: text("notification_emails"),
   followUpFreeDays: int("follow_up_free_days").default(7),
   followUpFee: int("follow_up_fee").default(0),
+  sameConcernFee: int("same_concern_fee").default(19900),
 });
 
 export const whatsappMessages = mysqlTable("whatsapp_messages", {
