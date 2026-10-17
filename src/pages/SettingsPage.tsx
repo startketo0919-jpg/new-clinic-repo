@@ -3,6 +3,7 @@ import { useClinic } from '../context/ClinicContext';
 import { useNavigate } from 'react-router-dom';
 import { LayoutDashboard, Save, Plus, Trash2, ShieldAlert, Send, Package, CreditCard, Video, Bell, CheckCircle2, XCircle, IndianRupee, RefreshCw, Tag, Percent, ToggleLeft, ToggleRight, AlertCircle } from 'lucide-react';
 import { WhatsAppTemplate } from '../types';
+import { cn } from '../lib/utils';
 
 export default function SettingsPage() {
   const { state, updateSettings, resetDatabase, updateUserPassword, updateTemplates, sendWhatsAppMessage } = useClinic();
