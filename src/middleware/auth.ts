@@ -70,6 +70,40 @@ export const requireAdminAuth = (
 };
 
 /**
+ * Enforces Doctor or Admin privilege (role === 'admin' || role === 'doctor')
+ */
+export const requireDoctorOrAdminAuth = (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction
+) => {
+  let token: string | undefined;
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    token = authHeader.split('Bearer ')[1].trim();
+  } else if (typeof req.query.token === 'string') {
+    token = req.query.token.trim();
+  }
+
+  if (!token) {
+    return res.status(401).json({ error: 'Unauthorized: Session required. Please log in.' });
+  }
+
+  const payload = verifyAuthToken(token);
+
+  if (!payload) {
+    return res.status(401).json({ error: 'Unauthorized: Session expired or invalid. Please log in again.' });
+  }
+
+  if (payload.role !== 'admin' && payload.role !== 'doctor') {
+    return res.status(403).json({ error: 'Forbidden: Doctor or Administrator privilege required.' });
+  }
+
+  req.user = payload;
+  next();
+};
+
+/**
  * Optional authentication: Attaches user payload if valid token is present
  */
 export const optionalAuth = (

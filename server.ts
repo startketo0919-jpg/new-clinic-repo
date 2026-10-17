@@ -9,9 +9,9 @@ import { createServer as createViteServer } from "vite";
 import { db, pool } from "./src/db/index.js";
 import { initDb } from "./src/db/init.js";
 import { hashPassword, verifyPassword, generateAuthToken } from "./src/db/auth-utils.js";
-import { liveQueue, patientRegistry, users, appointments, settings, whatsappMessages, whatsappTemplates, delhiveryOrders, patientShipments, onlineAppointments, appointmentFiles, rescheduleOtps } from "./src/db/schema.js";
+import { liveQueue, patientRegistry, users, appointments, settings, whatsappMessages, whatsappTemplates, delhiveryOrders, patientShipments, onlineAppointments, appointmentFiles, rescheduleOtps, specialFeePatients, customBookingLinks, promoCodes } from "./src/db/schema.js";
 import { eq, desc, asc, and } from "drizzle-orm";
-import { requireStaffAuth, requireAdminAuth, optionalAuth, AuthRequest } from "./src/middleware/auth.js";
+import { requireStaffAuth, requireAdminAuth, requireDoctorOrAdminAuth, optionalAuth, AuthRequest } from "./src/middleware/auth.js";
 import { 
   getClientIp, 
   securityHeaders, 
@@ -2231,8 +2231,14 @@ app.post('/api/appointments/profiles-by-phone', async (req, res) => {
     const sameConcernFee = sameConcernFeePaise / 100;
 
     if (cleanPhone.length !== 10) {
-      return res.json({ profiles: [], followUpDays, normalFee, followUpFee, sameConcernFee });
+      return res.json({ profiles: [], followUpDays, normalFee, followUpFee, sameConcernFee, isSpecialConcession: false });
     }
+
+    const [specialFeeRows]: any = await pool.query(
+      `SELECT id, patient_name, notes FROM special_fee_patients WHERE (phone = ? OR (LENGTH(phone) >= 10 AND RIGHT(phone, 10) = ?)) AND is_used = FALSE LIMIT 1`,
+      [cleanPhone, cleanPhone]
+    );
+    const isSpecialConcession = specialFeeRows.length > 0;
 
     const [registryPatients]: any = await pool.query(
       `SELECT clinic_id, full_name, phone, email, age, gender, last_visited, last_paid_visit, first_visit
@@ -2401,7 +2407,9 @@ app.post('/api/appointments/profiles-by-phone', async (req, res) => {
       followUpDays,
       normalFee,
       followUpFee,
-      sameConcernFee
+      sameConcernFee,
+      isSpecialConcession,
+      specialConcessionDetails: isSpecialConcession ? specialFeeRows[0] : null
     });
   } catch (error: any) {
     console.error('Error fetching profiles by phone:', error);
@@ -2423,6 +2431,51 @@ app.get('/api/appointments/config', async (req, res) => {
     const name = (req.query.name as string) || (req.query.patientName as string) || '';
     const pid = (req.query.pid as string) || '';
     const lastVisitDate = (req.query.lastVisitDate as string) || '';
+    const customToken = (req.query.customToken as string) || '';
+
+    // Check custom booking link if provided
+    let customLinkInfo: any = null;
+    if (customToken) {
+      try {
+        const [cRows]: any = await pool.query(
+          `SELECT token, patient_name, phone, amount, notes, is_used, expires_at FROM custom_booking_links WHERE token = ? LIMIT 1`,
+          [customToken]
+        );
+        if (cRows.length > 0 && !cRows[0].is_used) {
+          const c = cRows[0];
+          if (!c.expires_at || new Date(c.expires_at) >= new Date()) {
+            customLinkInfo = {
+              token: c.token,
+              patientName: c.patient_name,
+              phone: c.phone,
+              amountPaise: c.amount,
+              amount: c.amount / 100,
+              notes: c.notes
+            };
+          }
+        }
+      } catch (cErr) {
+        console.error('[Config] Error checking custom link:', cErr);
+      }
+    }
+
+    // Check special concession whitelist (walk-in / offline patient added by doctor or admin)
+    let isSpecialConcession = false;
+    let specialConcessionDetails: any = null;
+    if (phone.length === 10) {
+      try {
+        const [specRows]: any = await pool.query(
+          `SELECT id, patient_name, notes FROM special_fee_patients WHERE (phone = ? OR (LENGTH(phone) >= 10 AND RIGHT(phone, 10) = ?)) AND is_used = FALSE LIMIT 1`,
+          [phone, phone]
+        );
+        if (specRows.length > 0) {
+          isSpecialConcession = true;
+          specialConcessionDetails = specRows[0];
+        }
+      } catch (sErr) {
+        console.error('[Config] Error checking special concession:', sErr);
+      }
+    }
 
     let isFollowUp = false;
     let followUpDetails: any = null;
@@ -2492,8 +2545,13 @@ app.get('/api/appointments/config', async (req, res) => {
 
     const isSameConcernQuery = req.query.isSameConcern === 'true';
     let calculatedFeePaise = normalFeePaise;
-    if (isFollowUp) {
+    if (customLinkInfo) {
+      calculatedFeePaise = customLinkInfo.amountPaise;
+    } else if (isFollowUp) {
       calculatedFeePaise = followUpFeePaise;
+    } else if (isSpecialConcession) {
+      // Offline/walk-in patient added to concession whitelist gets same concern fee for one time
+      calculatedFeePaise = sameConcernFeePaise;
     } else if (isSameConcernQuery && (followUpDetails?.lastHealthConcern || pid)) {
       calculatedFeePaise = sameConcernFeePaise;
     }
@@ -2504,6 +2562,9 @@ app.get('/api/appointments/config', async (req, res) => {
       sameConcernFee: sameConcernFeePaise / 100,
       followUpDays,
       isFollowUp,
+      isSpecialConcession,
+      specialConcessionDetails,
+      customLink: customLinkInfo,
       calculatedFee: calculatedFeePaise / 100,
       isFree: calculatedFeePaise === 0,
       details: followUpDetails,
@@ -2547,7 +2608,8 @@ app.post('/api/appointments/create-order', async (req, res) => {
     const { 
       patientName, age, gender, phone, email, patientType, shortAddress, lastVisitDate, pid, 
       isSameConcern, healthConcern, healthConcernDetail, wantsCourierMedicine, 
-      courierAddress, courierContact, courierPincode 
+      courierAddress, courierContact, courierPincode,
+      customToken, promoCode
     } = req.body;
     
     if (!patientName || !phone || !email || !patientType || !healthConcern) {
@@ -2598,13 +2660,41 @@ app.post('/api/appointments/create-order', async (req, res) => {
     const followUpFeePaise = s.follow_up_fee !== undefined && s.follow_up_fee !== null ? s.follow_up_fee : 0;
     const sameConcernFeePaise = s.same_concern_fee !== undefined && s.same_concern_fee !== null ? s.same_concern_fee : normalFeePaise;
 
+    // 1. Check custom booking link
+    let customLink: any = null;
+    if (customToken && typeof customToken === 'string' && customToken.trim()) {
+      const [cRows]: any = await pool.query(
+        `SELECT * FROM custom_booking_links WHERE token = ? AND is_used = FALSE LIMIT 1`,
+        [customToken.trim()]
+      );
+      if (cRows.length === 0) {
+        return res.status(400).json({ error: 'This custom booking link is invalid, expired, or has already been used.' });
+      }
+      customLink = cRows[0];
+    }
+
+    // 2. Check special fee concession whitelist (walk-in / offline patient)
+    let specialConcessionRecord: any = null;
+    if (!customLink) {
+      const [specRows]: any = await pool.query(
+        `SELECT * FROM special_fee_patients WHERE (phone = ? OR (LENGTH(phone) >= 10 AND RIGHT(phone, 10) = ?)) AND is_used = FALSE LIMIT 1`,
+        [phone, phone]
+      );
+      if (specRows.length > 0) {
+        specialConcessionRecord = specRows[0];
+      }
+    }
+
     let isFollowUp = false;
     let fee = normalFeePaise;
     let finalHealthConcern = healthConcern;
     let finalHealthConcernDetail = healthConcernDetail;
     let clinicId = pid || null;
 
-    if (eligibility.isEligible) {
+    if (customLink) {
+      fee = customLink.amount;
+      isFollowUp = false;
+    } else if (eligibility.isEligible) {
       if (isSameConcern !== false) {
         // Tier 1: Same health concern within follow-up window
         isFollowUp = true;
@@ -2620,6 +2710,12 @@ app.post('/api/appointments/create-order', async (req, res) => {
         finalHealthConcernDetail = healthConcernDetail;
         if (!clinicId && eligibility.clinicId) clinicId = eligibility.clinicId;
       }
+    } else if (specialConcessionRecord) {
+      // Offline/walk-in patient whitelisted by doctor or admin: gets same concern fee
+      isFollowUp = false;
+      fee = sameConcernFeePaise;
+      finalHealthConcern = healthConcern;
+      finalHealthConcernDetail = healthConcernDetail;
     } else {
       // Outside follow-up window
       if (isSameConcern === true && (eligibility.lastHealthConcern || eligibility.lastDate || pid)) {
@@ -2636,6 +2732,33 @@ app.post('/api/appointments/create-order', async (req, res) => {
       }
     }
 
+    // 3. Check and apply promo code discount if provided
+    let appliedPromoCode: string | null = null;
+    let appliedDiscountPaise = 0;
+    if (promoCode && typeof promoCode === 'string' && promoCode.trim().length > 0) {
+      const cleanCode = promoCode.trim().toUpperCase();
+      const [pRows]: any = await pool.query(
+        `SELECT * FROM promo_codes WHERE UPPER(code) = ? AND is_active = TRUE LIMIT 1`,
+        [cleanCode]
+      );
+      if (pRows.length === 0) {
+        return res.status(400).json({ error: 'Invalid or inactive promo code.' });
+      }
+      const p = pRows[0];
+      if (p.is_limited && p.used_count >= p.max_uses) {
+        return res.status(400).json({ error: 'This promo code usage limit has been reached.' });
+      }
+
+      if (p.discount_type === 'percent') {
+        appliedDiscountPaise = Math.round((fee * p.discount_value) / 100);
+      } else {
+        appliedDiscountPaise = Math.min(fee, p.discount_value);
+      }
+      appliedDiscountPaise = Math.min(appliedDiscountPaise, fee);
+      fee = Math.max(0, fee - appliedDiscountPaise);
+      appliedPromoCode = p.code;
+    }
+
     // If still no clinicId, check patient_registry for this patientName & phone
     if (!clinicId) {
       const [regRows]: any = await pool.query(
@@ -2650,12 +2773,34 @@ app.post('/api/appointments/create-order', async (req, res) => {
     const appointmentId = 'APT-' + crypto.randomUUID().substring(0, 8);
     
     await pool.query(
-      `INSERT INTO online_appointments (id, patient_name, age, gender, phone, email, patient_type, short_address, last_visit_date, clinic_id, health_concern, health_concern_detail, wants_courier_medicine, courier_address, courier_contact, courier_pincode, payment_amount, payment_status, is_follow_up_free, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_slot', NOW())`,
-      [appointmentId, patientName, finalAge, finalGender, phone, email, patientType, shortAddress || null, effectiveLastVisitDate, clinicId || null, finalHealthConcern, finalHealthConcernDetail || null, wantsCourierMedicine || false, courierAddress || null, courierContact || phone, courierPincode || null, fee, isFree ? 'paid' : 'pending', isFollowUp]
+      `INSERT INTO online_appointments (
+        id, patient_name, age, gender, phone, email, patient_type, short_address, 
+        last_visit_date, clinic_id, health_concern, health_concern_detail, 
+        wants_courier_medicine, courier_address, courier_contact, courier_pincode, 
+        payment_amount, payment_status, is_follow_up_free, promo_code, discount_amount, 
+        custom_link_token, status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_slot', NOW())`,
+      [
+        appointmentId, patientName, finalAge, finalGender, phone, email, patientType, shortAddress || null, 
+        effectiveLastVisitDate, clinicId || null, finalHealthConcern, finalHealthConcernDetail || null, 
+        wantsCourierMedicine || false, courierAddress || null, courierContact || phone, courierPincode || null, 
+        fee, isFree ? 'paid' : 'pending', isFollowUp, appliedPromoCode, appliedDiscountPaise, 
+        customLink ? customLink.token : null
+      ]
     );
     
     if (isFree) {
-      return res.json({ appointmentId, amount: 0, isFree: true, isFollowUp });
+      // Consume one-time tokens immediately since no gateway is called
+      if (customLink) {
+        await pool.query(`UPDATE custom_booking_links SET is_used = TRUE, used_at = NOW(), used_appointment_id = ? WHERE id = ?`, [appointmentId, customLink.id]);
+      }
+      if (specialConcessionRecord) {
+        await pool.query(`UPDATE special_fee_patients SET is_used = TRUE, used_at = NOW(), used_appointment_id = ? WHERE id = ?`, [appointmentId, specialConcessionRecord.id]);
+      }
+      if (appliedPromoCode) {
+        await pool.query(`UPDATE promo_codes SET used_count = used_count + 1 WHERE UPPER(code) = UPPER(?)`, [appliedPromoCode]);
+      }
+      return res.json({ appointmentId, amount: 0, isFree: true, isFollowUp, discountAmount: appliedDiscountPaise / 100, promoCode: appliedPromoCode });
     }
     
     // Create Razorpay order
@@ -2676,7 +2821,7 @@ app.post('/api/appointments/create-order', async (req, res) => {
     
     await pool.query(`UPDATE online_appointments SET razorpay_order_id = ? WHERE id = ?`, [order.id, appointmentId]);
     
-    res.json({ appointmentId, orderId: order.id, amount: fee, currency: 'INR', keyId, isFollowUp, isFree: false });
+    res.json({ appointmentId, orderId: order.id, amount: fee, currency: 'INR', keyId, isFollowUp, isFree: false, discountAmount: appliedDiscountPaise / 100, promoCode: appliedPromoCode });
   } catch (err: any) {
     console.error('[Appointment] Create order error:', err);
     res.status(500).json({ error: 'Failed to create appointment order' });
@@ -2708,6 +2853,37 @@ app.post('/api/appointments/verify-payment', async (req, res) => {
       `UPDATE online_appointments SET razorpay_payment_id = ?, razorpay_signature = ?, payment_status = 'paid' WHERE id = ?`,
       [razorpay_payment_id, razorpay_signature, appointmentId]
     );
+
+    // Consume one-time tokens/concessions upon successful payment verification
+    try {
+      const [aptInfoRows]: any = await pool.query(
+        `SELECT phone, custom_link_token, promo_code FROM online_appointments WHERE id = ?`,
+        [appointmentId]
+      );
+      if (aptInfoRows.length > 0) {
+        const aptInfo = aptInfoRows[0];
+        if (aptInfo.custom_link_token) {
+          await pool.query(
+            `UPDATE custom_booking_links SET is_used = TRUE, used_at = NOW(), used_appointment_id = ? WHERE token = ?`,
+            [appointmentId, aptInfo.custom_link_token]
+          );
+        }
+        if (aptInfo.phone) {
+          await pool.query(
+            `UPDATE special_fee_patients SET is_used = TRUE, used_at = NOW(), used_appointment_id = ? WHERE (phone = ? OR (LENGTH(phone) >= 10 AND RIGHT(phone, 10) = ?)) AND is_used = FALSE`,
+            [appointmentId, aptInfo.phone, aptInfo.phone]
+          );
+        }
+        if (aptInfo.promo_code) {
+          await pool.query(
+            `UPDATE promo_codes SET used_count = used_count + 1 WHERE UPPER(code) = UPPER(?)`,
+            [aptInfo.promo_code]
+          );
+        }
+      }
+    } catch (consumeErr) {
+      console.error('[VerifyPayment] Error marking token/concession used:', consumeErr);
+    }
     
     res.json({ success: true, appointmentId });
   } catch (err: any) {
@@ -3583,6 +3759,288 @@ app.post('/api/appointments/history', async (req, res) => {
     }));
 
     res.json({ history, clinicId });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===== SPECIAL FEE CONCESSION WHITELIST (Doctor & Admin) =====
+app.get('/api/special-fee-patients', requireDoctorOrAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const [rows]: any = await pool.query(
+      `SELECT id, phone, patient_name as patientName, notes, fee_type as feeType, is_used as isUsed, used_at as usedAt, used_appointment_id as usedAppointmentId, created_by as createdBy, created_at as createdAt 
+       FROM special_fee_patients ORDER BY created_at DESC`
+    );
+    res.json({
+      patients: rows.map((r: any) => ({
+        ...r,
+        isUsed: Boolean(r.isUsed)
+      }))
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/special-fee-patients', requireDoctorOrAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const { phone, patientName, notes } = req.body;
+    const cleanPhone = String(phone || '').replace(/\D/g, '').slice(-10);
+    if (!/^[6-9]\d{9}$/.test(cleanPhone)) {
+      return res.status(400).json({ error: 'Valid 10-digit mobile number starting with 6-9 is required' });
+    }
+
+    const [existing]: any = await pool.query(
+      `SELECT id FROM special_fee_patients WHERE phone = ? AND is_used = FALSE LIMIT 1`,
+      [cleanPhone]
+    );
+    if (existing.length > 0) {
+      return res.status(400).json({ error: 'This mobile number is already in the active special concession list.' });
+    }
+
+    const id = 'SFP-' + crypto.randomUUID().substring(0, 8);
+    const createdBy = req.user?.username || req.user?.role || 'staff';
+
+    await pool.query(
+      `INSERT INTO special_fee_patients (id, phone, patient_name, notes, fee_type, is_used, created_by, created_at)
+       VALUES (?, ?, ?, ?, 'same_concern', FALSE, ?, NOW())`,
+      [id, cleanPhone, patientName ? String(patientName).trim() : null, notes ? String(notes).trim() : null, createdBy]
+    );
+
+    res.json({ success: true, id, message: 'Patient added to special fee concession list' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/special-fee-patients/:id', requireDoctorOrAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query(`DELETE FROM special_fee_patients WHERE id = ?`, [id]);
+    res.json({ success: true, message: 'Removed from concession list' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===== CUSTOM BOOKING LINKS (Doctor & Admin) =====
+app.get('/api/custom-booking-links', requireDoctorOrAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const [rows]: any = await pool.query(
+      `SELECT id, token, patient_name as patientName, phone, amount, notes, is_used as isUsed, used_at as usedAt, used_appointment_id as usedAppointmentId, expires_at as expiresAt, created_by as createdBy, created_at as createdAt 
+       FROM custom_booking_links ORDER BY created_at DESC`
+    );
+    res.json({
+      links: rows.map((r: any) => ({
+        ...r,
+        amount: r.amount / 100,
+        isUsed: Boolean(r.isUsed)
+      }))
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/custom-booking-links', requireDoctorOrAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const { amount, patientName, phone, notes } = req.body;
+    const numAmount = Number(amount);
+    if (isNaN(numAmount) || numAmount < 0) {
+      return res.status(400).json({ error: 'Please enter a valid amount' });
+    }
+
+    const token = crypto.randomBytes(16).toString('hex');
+    const id = 'CBL-' + crypto.randomUUID().substring(0, 8);
+    const amountPaise = Math.round(numAmount * 100);
+    const createdBy = req.user?.username || req.user?.role || 'doctor';
+    const cleanPhone = phone ? String(phone).replace(/\D/g, '').slice(-10) : null;
+
+    await pool.query(
+      `INSERT INTO custom_booking_links (id, token, patient_name, phone, amount, notes, is_used, created_by, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, FALSE, ?, NOW())`,
+      [id, token, patientName ? String(patientName).trim() : null, cleanPhone, amountPaise, notes ? String(notes).trim() : null, createdBy]
+    );
+
+    const bookingUrl = `https://app.drsunilkumarbhms.in/book?customToken=${token}`;
+    res.json({ success: true, id, token, bookingUrl, amount: numAmount });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/custom-booking-links/:id', requireDoctorOrAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query(`DELETE FROM custom_booking_links WHERE id = ?`, [id]);
+    res.json({ success: true, message: 'Custom booking link deleted' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/custom-booking-links/validate/:token', async (req, res) => {
+  try {
+    const { token } = req.params;
+    const [rows]: any = await pool.query(
+      `SELECT * FROM custom_booking_links WHERE token = ? LIMIT 1`,
+      [token]
+    );
+    if (rows.length === 0) {
+      return res.status(404).json({ valid: false, error: 'Custom booking link not found or invalid.' });
+    }
+    const link = rows[0];
+    if (link.is_used) {
+      return res.status(400).json({ valid: false, error: 'This custom booking link has already been used.' });
+    }
+    if (link.expires_at && new Date(link.expires_at) < new Date()) {
+      return res.status(400).json({ valid: false, error: 'This custom booking link has expired.' });
+    }
+    res.json({
+      valid: true,
+      token: link.token,
+      amount: link.amount / 100,
+      amountPaise: link.amount,
+      patientName: link.patient_name || '',
+      phone: link.phone || '',
+      notes: link.notes || ''
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===== PROMO CODES (Admin only) =====
+app.get('/api/promo-codes', requireAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const [rows]: any = await pool.query(
+      `SELECT id, code, name, discount_type as discountType, discount_value as discountValue, is_limited as isLimited, max_uses as maxUses, used_count as usedCount, is_active as isActive, created_at as createdAt 
+       FROM promo_codes ORDER BY created_at DESC`
+    );
+    res.json({
+      promoCodes: rows.map((r: any) => ({
+        ...r,
+        isActive: Boolean(r.isActive),
+        isLimited: Boolean(r.isLimited),
+        discountDisplay: r.discountType === 'percent' ? `${r.discountValue}%` : `₹${r.discountValue / 100}`
+      }))
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/promo-codes', requireAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const { code, name, discountType, discountValue, isLimited, maxUses, isActive } = req.body;
+    if (!code || !name || !discountType || discountValue === undefined) {
+      return res.status(400).json({ error: 'Code, Name, Discount Type, and Discount Value are required.' });
+    }
+
+    const cleanCode = String(code).trim().toUpperCase();
+    if (!/^[A-Z0-9_-]{2,30}$/.test(cleanCode)) {
+      return res.status(400).json({ error: 'Promo code must be 2-30 alphanumeric characters (uppercase).' });
+    }
+
+    if (discountType !== 'percent' && discountType !== 'fixed') {
+      return res.status(400).json({ error: 'Discount type must be either percent or fixed (₹).' });
+    }
+
+    const numVal = Number(discountValue);
+    if (isNaN(numVal) || numVal <= 0) {
+      return res.status(400).json({ error: 'Discount value must be greater than 0.' });
+    }
+    if (discountType === 'percent' && numVal > 100) {
+      return res.status(400).json({ error: 'Percentage discount cannot exceed 100%.' });
+    }
+
+    const [existing]: any = await pool.query(
+      `SELECT id FROM promo_codes WHERE UPPER(code) = ? LIMIT 1`,
+      [cleanCode]
+    );
+    if (existing.length > 0) {
+      return res.status(400).json({ error: 'A promo code with this code already exists.' });
+    }
+
+    const id = 'PROMO-' + crypto.randomUUID().substring(0, 8);
+    const storedVal = discountType === 'fixed' ? Math.round(numVal * 100) : Math.round(numVal);
+    const limitBool = Boolean(isLimited);
+    const maxU = limitBool && maxUses ? parseInt(String(maxUses), 10) : null;
+    const activeBool = isActive !== undefined ? Boolean(isActive) : true;
+
+    await pool.query(
+      `INSERT INTO promo_codes (id, code, name, discount_type, discount_value, is_limited, max_uses, used_count, is_active, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, NOW())`,
+      [id, cleanCode, String(name).trim(), discountType, storedVal, limitBool, maxU, activeBool]
+    );
+
+    res.json({ success: true, id, code: cleanCode, message: 'Promo code created successfully' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/promo-codes/:id/toggle', requireAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query(`UPDATE promo_codes SET is_active = NOT is_active WHERE id = ?`, [id]);
+    res.json({ success: true, message: 'Promo code status updated' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/promo-codes/:id', requireAdminAuth, async (req: AuthRequest, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query(`DELETE FROM promo_codes WHERE id = ?`, [id]);
+    res.json({ success: true, message: 'Promo code deleted successfully' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Public promo code validation for checkout
+app.post('/api/appointments/validate-promo', async (req, res) => {
+  try {
+    const { code, currentFee } = req.body;
+    if (!code || typeof code !== 'string') {
+      return res.status(400).json({ error: 'Promo code is required.' });
+    }
+    const cleanCode = code.trim().toUpperCase();
+    const [rows]: any = await pool.query(
+      `SELECT * FROM promo_codes WHERE UPPER(code) = ? LIMIT 1`,
+      [cleanCode]
+    );
+
+    if (rows.length === 0 || !rows[0].is_active) {
+      return res.status(400).json({ error: 'Invalid or inactive promo code.' });
+    }
+
+    const p = rows[0];
+    if (p.is_limited && p.used_count >= p.max_uses) {
+      return res.status(400).json({ error: 'Promo code usage limit has been reached.' });
+    }
+
+    const currentFeePaise = currentFee !== undefined ? Math.round(Number(currentFee) * 100) : 19900;
+    let discountPaise = 0;
+    if (p.discount_type === 'percent') {
+      discountPaise = Math.round((currentFeePaise * p.discount_value) / 100);
+    } else {
+      discountPaise = Math.min(currentFeePaise, p.discount_value);
+    }
+    discountPaise = Math.min(discountPaise, currentFeePaise);
+    const finalFeePaise = Math.max(0, currentFeePaise - discountPaise);
+
+    res.json({
+      valid: true,
+      code: p.code,
+      name: p.name,
+      discountType: p.discount_type,
+      discountValue: p.discount_value,
+      discountAmount: discountPaise / 100,
+      finalFee: finalFeePaise / 100
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

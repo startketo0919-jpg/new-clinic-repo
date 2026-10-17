@@ -188,6 +188,47 @@ export async function initDb() {
       verified BOOLEAN DEFAULT FALSE,
       attempts INT DEFAULT 0,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`,
+
+    `CREATE TABLE IF NOT EXISTS special_fee_patients (
+      id VARCHAR(191) PRIMARY KEY,
+      phone VARCHAR(20) NOT NULL,
+      patient_name VARCHAR(255),
+      notes TEXT,
+      fee_type VARCHAR(50) DEFAULT 'same_concern',
+      is_used BOOLEAN DEFAULT FALSE,
+      used_at TIMESTAMP NULL,
+      used_appointment_id VARCHAR(191),
+      created_by VARCHAR(100),
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`,
+
+    `CREATE TABLE IF NOT EXISTS custom_booking_links (
+      id VARCHAR(191) PRIMARY KEY,
+      token VARCHAR(64) NOT NULL UNIQUE,
+      patient_name VARCHAR(255),
+      phone VARCHAR(20),
+      amount INT NOT NULL,
+      notes TEXT,
+      is_used BOOLEAN DEFAULT FALSE,
+      used_at TIMESTAMP NULL,
+      used_appointment_id VARCHAR(191),
+      expires_at TIMESTAMP NULL,
+      created_by VARCHAR(100),
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`,
+
+    `CREATE TABLE IF NOT EXISTS promo_codes (
+      id VARCHAR(191) PRIMARY KEY,
+      code VARCHAR(50) NOT NULL UNIQUE,
+      name VARCHAR(255) NOT NULL,
+      discount_type VARCHAR(20) NOT NULL,
+      discount_value INT NOT NULL,
+      is_limited BOOLEAN DEFAULT FALSE,
+      max_uses INT NULL,
+      used_count INT DEFAULT 0,
+      is_active BOOLEAN DEFAULT TRUE,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`
   ];
 
@@ -208,6 +249,9 @@ export async function initDb() {
     `ALTER TABLE settings ADD COLUMN IF NOT EXISTS same_concern_fee INT DEFAULT 19900;`,
     `ALTER TABLE online_appointments ADD COLUMN IF NOT EXISTS age INT;`,
     `ALTER TABLE online_appointments ADD COLUMN IF NOT EXISTS gender VARCHAR(20);`,
+    `ALTER TABLE online_appointments ADD COLUMN IF NOT EXISTS promo_code VARCHAR(50);`,
+    `ALTER TABLE online_appointments ADD COLUMN IF NOT EXISTS discount_amount INT DEFAULT 0;`,
+    `ALTER TABLE online_appointments ADD COLUMN IF NOT EXISTS custom_link_token VARCHAR(64);`,
     `ALTER TABLE patient_registry ADD COLUMN IF NOT EXISTS last_paid_visit TIMESTAMP NULL;`,
     `ALTER TABLE patient_registry ADD COLUMN IF NOT EXISTS last_paid_amount INT DEFAULT NULL;`
   ];

@@ -173,6 +173,9 @@ export const onlineAppointments = mysqlTable("online_appointments", {
   confirmationEmailSent: boolean("confirmation_email_sent").default(false),
   reminder2hSent: boolean("reminder_2h_sent").default(false),
   reminder1hSent: boolean("reminder_1h_sent").default(false),
+  promoCode: varchar("promo_code", { length: 50 }),
+  discountAmount: int("discount_amount").default(0),
+  customLinkToken: varchar("custom_link_token", { length: 64 }),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at"),
 });
@@ -197,3 +200,45 @@ export const rescheduleOtps = mysqlTable("reschedule_otps", {
   attempts: int("attempts").default(0),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
+
+export const specialFeePatients = mysqlTable("special_fee_patients", {
+  id: varchar("id", { length: 191 }).primaryKey(),
+  phone: varchar("phone", { length: 20 }).notNull(),
+  patientName: varchar("patient_name", { length: 255 }),
+  notes: text("notes"),
+  feeType: varchar("fee_type", { length: 50 }).default('same_concern'),
+  isUsed: boolean("is_used").default(false),
+  usedAt: timestamp("used_at"),
+  usedAppointmentId: varchar("used_appointment_id", { length: 191 }),
+  createdBy: varchar("created_by", { length: 100 }),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const customBookingLinks = mysqlTable("custom_booking_links", {
+  id: varchar("id", { length: 191 }).primaryKey(),
+  token: varchar("token", { length: 64 }).notNull().unique(),
+  patientName: varchar("patient_name", { length: 255 }),
+  phone: varchar("phone", { length: 20 }),
+  amount: int("amount").notNull(), // in paise
+  notes: text("notes"),
+  isUsed: boolean("is_used").default(false),
+  usedAt: timestamp("used_at"),
+  usedAppointmentId: varchar("used_appointment_id", { length: 191 }),
+  expiresAt: timestamp("expires_at"),
+  createdBy: varchar("created_by", { length: 100 }),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const promoCodes = mysqlTable("promo_codes", {
+  id: varchar("id", { length: 191 }).primaryKey(),
+  code: varchar("code", { length: 50 }).notNull().unique(),
+  name: varchar("name", { length: 255 }).notNull(),
+  discountType: varchar("discount_type", { length: 20 }).notNull(), // 'percent' | 'fixed'
+  discountValue: int("discount_value").notNull(), // percent (1-100) or amount in paise
+  isLimited: boolean("is_limited").default(false),
+  maxUses: int("max_uses"),
+  usedCount: int("used_count").default(0),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+

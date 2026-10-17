@@ -129,3 +129,45 @@ export interface WhatsAppTemplate {
   variables: string; // JSON string
   isActive: boolean;
 }
+
+export interface SpecialFeePatient {
+  id: string;
+  phone: string;
+  patientName?: string;
+  notes?: string;
+  feeType: string;
+  isUsed: boolean;
+  usedAt?: string;
+  usedAppointmentId?: string;
+  createdBy?: string;
+  createdAt: string;
+}
+
+export interface CustomBookingLink {
+  id: string;
+  token: string;
+  patientName?: string;
+  phone?: string;
+  amount: number; // in paise
+  notes?: string;
+  isUsed: boolean;
+  usedAt?: string;
+  usedAppointmentId?: string;
+  expiresAt?: string;
+  createdBy?: string;
+  createdAt: string;
+}
+
+export interface PromoCode {
+  id: string;
+  code: string;
+  name: string;
+  discountType: 'percent' | 'fixed';
+  discountValue: number; // % or paise
+  isLimited: boolean;
+  maxUses?: number;
+  usedCount: number;
+  isActive: boolean;
+  createdAt: string;
+}
+

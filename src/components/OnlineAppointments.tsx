@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Calendar, Video, Phone, Download, RefreshCw, Search, Filter, ChevronDown, ChevronUp, Check, X, Trash2, FileText, MapPin, ExternalLink, CalendarDays, List, IndianRupee, Eye, Truck } from 'lucide-react';
+import { Calendar, Video, Phone, Download, RefreshCw, Search, Filter, ChevronDown, ChevronUp, Check, X, Trash2, FileText, MapPin, ExternalLink, CalendarDays, List, IndianRupee, Eye, Truck, Link2, UserPlus, Sparkles, Copy, Plus, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { format, startOfMonth, endOfMonth, startOfWeek, endOfWeek, eachDayOfInterval, isSameMonth, isToday, addMonths, subMonths, parseISO } from 'date-fns';
 import { cn } from '../lib/utils';
 
@@ -124,6 +124,188 @@ export default function OnlineAppointments({ userRole, onAutofillDelhivery }: On
       alert('Error saving fees: ' + err.message);
     } finally {
       setSavingFees(false);
+    }
+  };
+
+  const isDoctorOrAdmin = userRole === 'admin' || userRole === 'doctor';
+
+  // Special Concession Whitelist States
+  const [showSpecialConcessionModal, setShowSpecialConcessionModal] = useState(false);
+  const [specialPatients, setSpecialPatients] = useState<any[]>([]);
+  const [loadingSpecialPatients, setLoadingSpecialPatients] = useState(false);
+  const [newSpecialPhone, setNewSpecialPhone] = useState('');
+  const [newSpecialName, setNewSpecialName] = useState('');
+  const [newSpecialNotes, setNewSpecialNotes] = useState('');
+  const [addingSpecialPatient, setAddingSpecialPatient] = useState(false);
+  const [specialError, setSpecialError] = useState('');
+  const [specialSuccess, setSpecialSuccess] = useState('');
+
+  const fetchSpecialPatients = async () => {
+    const token = sessionStorage.getItem('staffAuthToken') || '';
+    setLoadingSpecialPatients(true);
+    try {
+      const res = await fetch('/api/special-fee-patients', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setSpecialPatients(data.patients || []);
+      }
+    } catch (e) {
+      console.error('Failed to fetch special patients:', e);
+    } finally {
+      setLoadingSpecialPatients(false);
+    }
+  };
+
+  const handleAddSpecialPatient = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSpecialError('');
+    setSpecialSuccess('');
+    const cleanPhone = newSpecialPhone.replace(/\D/g, '').slice(-10);
+    if (!/^[6-9]\d{9}$/.test(cleanPhone)) {
+      setSpecialError('Please enter a valid 10-digit mobile number starting with 6-9');
+      return;
+    }
+    setAddingSpecialPatient(true);
+    try {
+      const token = sessionStorage.getItem('staffAuthToken') || '';
+      const res = await fetch('/api/special-fee-patients', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({
+          phone: cleanPhone,
+          patientName: newSpecialName.trim() || undefined,
+          notes: newSpecialNotes.trim() || undefined
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setSpecialSuccess('Patient mobile added to concession whitelist!');
+        setNewSpecialPhone('');
+        setNewSpecialName('');
+        setNewSpecialNotes('');
+        fetchSpecialPatients();
+      } else {
+        setSpecialError(data.error || 'Failed to add patient');
+      }
+    } catch (err: any) {
+      setSpecialError(err.message || 'Network error');
+    } finally {
+      setAddingSpecialPatient(false);
+    }
+  };
+
+  const handleDeleteSpecialPatient = async (id: string) => {
+    if (!window.confirm('Are you sure you want to remove this patient from the concession list?')) return;
+    try {
+      const token = sessionStorage.getItem('staffAuthToken') || '';
+      const res = await fetch(`/api/special-fee-patients/${id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        setSpecialPatients(prev => prev.filter(p => p.id !== id));
+      }
+    } catch (err: any) {
+      alert('Failed to delete: ' + err.message);
+    }
+  };
+
+  // Custom Booking Links States
+  const [showCustomLinkModal, setShowCustomLinkModal] = useState(false);
+  const [customLinks, setCustomLinks] = useState<any[]>([]);
+  const [loadingCustomLinks, setLoadingCustomLinks] = useState(false);
+  const [newCustomAmount, setNewCustomAmount] = useState('');
+  const [newCustomPatientName, setNewCustomPatientName] = useState('');
+  const [newCustomPhone, setNewCustomPhone] = useState('');
+  const [newCustomNotes, setNewCustomNotes] = useState('');
+  const [generatingCustomLink, setGeneratingCustomLink] = useState(false);
+  const [createdLinkUrl, setCreatedLinkUrl] = useState('');
+  const [copiedLinkId, setCopiedLinkId] = useState<string | null>(null);
+  const [customLinkError, setCustomLinkError] = useState('');
+
+  const fetchCustomLinks = async () => {
+    const token = sessionStorage.getItem('staffAuthToken') || '';
+    setLoadingCustomLinks(true);
+    try {
+      const res = await fetch('/api/custom-booking-links', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setCustomLinks(data.links || []);
+      }
+    } catch (e) {
+      console.error('Failed to fetch custom links:', e);
+    } finally {
+      setLoadingCustomLinks(false);
+    }
+  };
+
+  const handleCreateCustomLink = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setCustomLinkError('');
+    setCreatedLinkUrl('');
+    const amt = parseFloat(newCustomAmount);
+    if (isNaN(amt) || amt < 0) {
+      setCustomLinkError('Please enter a valid amount (₹)');
+      return;
+    }
+    setGeneratingCustomLink(true);
+    try {
+      const token = sessionStorage.getItem('staffAuthToken') || '';
+      const res = await fetch('/api/custom-booking-links', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({
+          amount: amt,
+          patientName: newCustomPatientName.trim() || undefined,
+          phone: newCustomPhone.trim() || undefined,
+          notes: newCustomNotes.trim() || undefined
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setCreatedLinkUrl(data.bookingUrl);
+        setNewCustomAmount('');
+        setNewCustomPatientName('');
+        setNewCustomPhone('');
+        setNewCustomNotes('');
+        fetchCustomLinks();
+      } else {
+        setCustomLinkError(data.error || 'Failed to generate custom link');
+      }
+    } catch (err: any) {
+      setCustomLinkError(err.message || 'Network error');
+    } finally {
+      setGeneratingCustomLink(false);
+    }
+  };
+
+  const handleDeleteCustomLink = async (id: string) => {
+    if (!window.confirm('Are you sure you want to delete this custom booking link?')) return;
+    try {
+      const token = sessionStorage.getItem('staffAuthToken') || '';
+      const res = await fetch(`/api/custom-booking-links/${id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        setCustomLinks(prev => prev.filter(l => l.id !== id));
+      }
+    } catch (err: any) {
+      alert('Failed to delete: ' + err.message);
+    }
+  };
+
+  const copyToClipboard = async (text: string, id: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedLinkId(id);
+      setTimeout(() => setCopiedLinkId(null), 2500);
+    } catch (e) {
+      console.error('Clipboard copy failed:', e);
     }
   };
 
@@ -391,7 +573,27 @@ export default function OnlineAppointments({ userRole, onAutofillDelhivery }: On
           <p className="text-slate-500 text-sm mt-1">Manage video consultations and digital payments</p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          {isDoctorOrAdmin && (
+            <>
+              <button
+                onClick={() => { fetchSpecialPatients(); setShowSpecialConcessionModal(true); }}
+                className="px-3.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-sm font-semibold rounded-xl border border-emerald-200 transition-colors flex items-center gap-1.5 shadow-sm"
+                title="Manage offline patient concession whitelist"
+              >
+                <UserPlus className="w-4 h-4" /> Concession Whitelist
+              </button>
+
+              <button
+                onClick={() => { fetchCustomLinks(); setShowCustomLinkModal(true); }}
+                className="px-3.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-700 text-sm font-semibold rounded-xl border border-amber-200 transition-colors flex items-center gap-1.5 shadow-sm"
+                title="Create custom amount booking link"
+              >
+                <Link2 className="w-4 h-4" /> Custom Link
+              </button>
+            </>
+          )}
+
           {userRole === 'admin' && (
             <button
               onClick={() => { fetchFees(); setShowFeeModal(true); }}
@@ -971,6 +1173,355 @@ export default function OnlineAppointments({ userRole, onAutofillDelhivery }: On
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Special Concession Modal (Doctor & Admin) */}
+      {showSpecialConcessionModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            {/* Modal Header */}
+            <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+              <div className="flex items-center gap-2">
+                <UserPlus className="w-5 h-5 text-emerald-600" />
+                <h3 className="font-bold text-slate-800 text-lg">Special Fee Concession Whitelist</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => { setShowSpecialConcessionModal(false); setSpecialError(''); setSpecialSuccess(''); }}
+                className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-200 rounded-lg transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-auto p-6 space-y-6">
+              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-xs text-emerald-900 leading-relaxed">
+                Add offline/walk-in patient mobile numbers to this list. When this patient books online, the app automatically charges the <strong>Same Health Concern (Post Follow-up) Fee (₹{feeSettings.sameConcernFee})</strong> for <strong>one-time only</strong>, saves their health concern, and creates their profile.
+              </div>
+
+              {specialError && (
+                <div className="p-3 bg-rose-50 text-rose-600 border border-rose-200 rounded-xl text-xs font-medium flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" /> {specialError}
+                </div>
+              )}
+
+              {specialSuccess && (
+                <div className="p-3 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-xl text-xs font-medium flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 shrink-0" /> {specialSuccess}
+                </div>
+              )}
+
+              {/* Add form */}
+              <form onSubmit={handleAddSpecialPatient} className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
+                <div className="font-semibold text-xs uppercase tracking-wider text-slate-500">Add New Patient to Whitelist</div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">Mobile Number *</label>
+                    <input
+                      type="tel"
+                      maxLength={10}
+                      value={newSpecialPhone}
+                      onChange={e => setNewSpecialPhone(e.target.value.replace(/\D/g, ''))}
+                      placeholder="10-digit mobile"
+                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">Patient Name (Optional)</label>
+                    <input
+                      type="text"
+                      value={newSpecialName}
+                      onChange={e => setNewSpecialName(e.target.value)}
+                      placeholder="e.g. Ramesh Sharma"
+                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Notes / Offline History (Optional)</label>
+                  <input
+                    type="text"
+                    value={newSpecialNotes}
+                    onChange={e => setNewSpecialNotes(e.target.value)}
+                    placeholder="e.g. In-clinic consultation last month"
+                    className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                  />
+                </div>
+                <div className="flex justify-end pt-1">
+                  <button
+                    type="submit"
+                    disabled={addingSpecialPatient || !newSpecialPhone}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-lg flex items-center gap-1.5 shadow-sm disabled:opacity-50 transition-colors"
+                  >
+                    {addingSpecialPatient ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+                    Add to Whitelist
+                  </button>
+                </div>
+              </form>
+
+              {/* Whitelist records */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-xs uppercase tracking-wider text-slate-500">
+                    Enrolled Patients ({specialPatients.length})
+                  </span>
+                  <button
+                    type="button"
+                    onClick={fetchSpecialPatients}
+                    className="text-xs text-indigo-600 hover:text-indigo-700 flex items-center gap-1"
+                  >
+                    <RefreshCw className={cn("w-3 h-3", loadingSpecialPatients && "animate-spin")} /> Refresh
+                  </button>
+                </div>
+
+                {specialPatients.length === 0 ? (
+                  <div className="text-center py-8 text-xs text-slate-400 bg-slate-50 rounded-xl border border-dashed border-slate-200">
+                    No patients currently on the concession whitelist.
+                  </div>
+                ) : (
+                  <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden bg-white">
+                    {specialPatients.map((p) => (
+                      <div key={p.id} className="p-3 sm:p-4 flex items-center justify-between gap-3 text-sm">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-bold text-slate-800">{p.phone}</span>
+                            {p.patientName && <span className="font-medium text-slate-700">({p.patientName})</span>}
+                            {p.isUsed ? (
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200">
+                                Used on {p.usedAt ? format(new Date(p.usedAt), 'dd MMM yyyy') : 'Appointment'}
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200 flex items-center gap-1">
+                                <Sparkles className="w-2.5 h-2.5" /> Active (1 Use Left)
+                              </span>
+                            )}
+                          </div>
+                          {p.notes && <div className="text-xs text-slate-500 mt-1 truncate">{p.notes}</div>}
+                          <div className="text-[11px] text-slate-400 mt-1">
+                            Added {format(new Date(p.createdAt), 'dd MMM yyyy, hh:mm a')} by {p.createdBy || 'staff'}
+                          </div>
+                        </div>
+
+                        {!p.isUsed && (
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteSpecialPatient(p.id)}
+                            className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                            title="Remove from whitelist"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Custom Booking Links Modal (Doctor & Admin) */}
+      {showCustomLinkModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            {/* Modal Header */}
+            <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+              <div className="flex items-center gap-2">
+                <Link2 className="w-5 h-5 text-amber-600" />
+                <h3 className="font-bold text-slate-800 text-lg">One-Time Custom Fee Booking Links</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => { setShowCustomLinkModal(false); setCustomLinkError(''); setCreatedLinkUrl(''); }}
+                className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-200 rounded-lg transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-auto p-6 space-y-6">
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-xs text-amber-900 leading-relaxed">
+                Generate a single-use booking link with any custom consultation fee (e.g. ₹100, ₹250). When the patient opens this link, their fee is locked to that exact amount for one booking.
+              </div>
+
+              {createdLinkUrl && (
+                <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl space-y-2">
+                  <div className="flex items-center gap-2 text-emerald-800 text-xs font-bold">
+                    <CheckCircle2 className="w-4 h-4" /> Custom Link Generated Successfully!
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value={createdLinkUrl}
+                      className="flex-1 px-3 py-2 bg-white border border-emerald-300 rounded-lg text-xs font-mono text-slate-700 select-all outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => copyToClipboard(createdLinkUrl, 'NEW')}
+                      className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-lg flex items-center gap-1.5 shadow-sm transition-colors"
+                    >
+                      {copiedLinkId === 'NEW' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                      {copiedLinkId === 'NEW' ? 'Copied!' : 'Copy Link'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {customLinkError && (
+                <div className="p-3 bg-rose-50 text-rose-600 border border-rose-200 rounded-xl text-xs font-medium flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" /> {customLinkError}
+                </div>
+              )}
+
+              {/* Generate Form */}
+              <form onSubmit={handleCreateCustomLink} className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
+                <div className="font-semibold text-xs uppercase tracking-wider text-slate-500">Create New Custom Link</div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">Custom Amount (₹) *</label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-2 text-slate-400 font-bold text-sm">₹</span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={newCustomAmount}
+                        onChange={e => setNewCustomAmount(e.target.value)}
+                        placeholder="e.g. 150"
+                        className="w-full pl-7 pr-3 py-2 bg-white border border-slate-200 rounded-lg text-sm font-bold text-slate-800 focus:ring-2 focus:ring-amber-500 outline-none"
+                        required
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">Patient Name (Optional)</label>
+                    <input
+                      type="text"
+                      value={newCustomPatientName}
+                      onChange={e => setNewCustomPatientName(e.target.value)}
+                      placeholder="e.g. Anita Sharma"
+                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">Phone (Optional)</label>
+                    <input
+                      type="tel"
+                      maxLength={10}
+                      value={newCustomPhone}
+                      onChange={e => setNewCustomPhone(e.target.value.replace(/\D/g, ''))}
+                      placeholder="10-digit mobile"
+                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 outline-none"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Reason / Notes (Optional)</label>
+                  <input
+                    type="text"
+                    value={newCustomNotes}
+                    onChange={e => setNewCustomNotes(e.target.value)}
+                    placeholder="e.g. Special concession for repeat review"
+                    className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 outline-none"
+                  />
+                </div>
+                <div className="flex justify-end pt-1">
+                  <button
+                    type="submit"
+                    disabled={generatingCustomLink || !newCustomAmount}
+                    className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold rounded-lg flex items-center gap-1.5 shadow-sm disabled:opacity-50 transition-colors"
+                  >
+                    {generatingCustomLink ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+                    Generate Link
+                  </button>
+                </div>
+              </form>
+
+              {/* Existing links */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-xs uppercase tracking-wider text-slate-500">
+                    Generated Links ({customLinks.length})
+                  </span>
+                  <button
+                    type="button"
+                    onClick={fetchCustomLinks}
+                    className="text-xs text-indigo-600 hover:text-indigo-700 flex items-center gap-1"
+                  >
+                    <RefreshCw className={cn("w-3 h-3", loadingCustomLinks && "animate-spin")} /> Refresh
+                  </button>
+                </div>
+
+                {customLinks.length === 0 ? (
+                  <div className="text-center py-8 text-xs text-slate-400 bg-slate-50 rounded-xl border border-dashed border-slate-200">
+                    No custom booking links generated yet.
+                  </div>
+                ) : (
+                  <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden bg-white">
+                    {customLinks.map((l) => {
+                      const linkUrl = `https://app.drsunilkumarbhms.in/book?customToken=${l.token}`;
+                      return (
+                        <div key={l.id} className="p-3 sm:p-4 flex items-center justify-between gap-3 text-sm">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-bold text-amber-900 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded text-xs">
+                                ₹{l.amount}
+                              </span>
+                              {l.patientName && <span className="font-bold text-slate-800">{l.patientName}</span>}
+                              {l.phone && <span className="text-xs text-slate-500">({l.phone})</span>}
+                              {l.isUsed ? (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200">
+                                  Used {l.usedAt ? format(new Date(l.usedAt), 'dd MMM yyyy') : ''}
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                  Active (Unused)
+                                </span>
+                              )}
+                            </div>
+                            {l.notes && <div className="text-xs text-slate-500 mt-1 truncate">{l.notes}</div>}
+                            <div className="text-[11px] text-slate-400 mt-1">
+                              Created {format(new Date(l.createdAt), 'dd MMM yyyy, hh:mm a')} by {l.createdBy || 'doctor'}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 shrink-0">
+                            {!l.isUsed && (
+                              <button
+                                type="button"
+                                onClick={() => copyToClipboard(linkUrl, l.id)}
+                                className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg flex items-center gap-1 transition-colors"
+                                title="Copy booking link"
+                              >
+                                {copiedLinkId === l.id ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                                {copiedLinkId === l.id ? 'Copied' : 'Copy'}
+                              </button>
+                            )}
+
+                            {!l.isUsed && (
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteCustomLink(l.id)}
+                                className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                                title="Delete link"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         </div>
       )}

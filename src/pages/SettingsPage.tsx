@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useClinic } from '../context/ClinicContext';
 import { useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Save, Plus, Trash2, ShieldAlert, Send, Package, CreditCard, Video, Bell, CheckCircle2, XCircle, IndianRupee, RefreshCw } from 'lucide-react';
+import { LayoutDashboard, Save, Plus, Trash2, ShieldAlert, Send, Package, CreditCard, Video, Bell, CheckCircle2, XCircle, IndianRupee, RefreshCw, Tag, Percent, ToggleLeft, ToggleRight, AlertCircle } from 'lucide-react';
 import { WhatsAppTemplate } from '../types';
 
 export default function SettingsPage() {
@@ -105,6 +105,117 @@ export default function SettingsPage() {
   const [tplLang, setTplLang] = useState('en');
   const [tplVars, setTplVars] = useState<string[]>([]);
   const availableVars = ['Name', 'Patient ID', 'Token Number', 'Age', 'Date', 'Wait Time'];
+
+  // Promo Codes State (Admin only)
+  const [promoCodes, setPromoCodes] = useState<any[]>([]);
+  const [loadingPromoCodes, setLoadingPromoCodes] = useState(false);
+  const [newPromoCode, setNewPromoCode] = useState('');
+  const [newPromoName, setNewPromoName] = useState('');
+  const [newPromoType, setNewPromoType] = useState<'percent' | 'fixed'>('percent');
+  const [newPromoValue, setNewPromoValue] = useState('');
+  const [newPromoIsLimited, setNewPromoIsLimited] = useState(false);
+  const [newPromoMaxUses, setNewPromoMaxUses] = useState('');
+  const [newPromoIsActive, setNewPromoIsActive] = useState(true);
+  const [creatingPromo, setCreatingPromo] = useState(false);
+  const [promoError, setPromoError] = useState('');
+  const [promoSuccess, setPromoSuccess] = useState('');
+
+  const fetchPromoCodes = async () => {
+    const token = sessionStorage.getItem('staffAuthToken') || '';
+    setLoadingPromoCodes(true);
+    try {
+      const res = await fetch('/api/promo-codes', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setPromoCodes(data.promoCodes || []);
+      }
+    } catch (e) {
+      console.error('Failed to fetch promo codes:', e);
+    } finally {
+      setLoadingPromoCodes(false);
+    }
+  };
+
+  const handleCreatePromoCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPromoError('');
+    setPromoSuccess('');
+    const val = parseFloat(newPromoValue);
+    if (isNaN(val) || val <= 0) {
+      setPromoError('Please enter a valid discount value greater than 0');
+      return;
+    }
+    if (newPromoType === 'percent' && val > 100) {
+      setPromoError('Percentage discount cannot exceed 100%');
+      return;
+    }
+    setCreatingPromo(true);
+    try {
+      const token = sessionStorage.getItem('staffAuthToken') || '';
+      const res = await fetch('/api/promo-codes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({
+          code: newPromoCode.trim().toUpperCase(),
+          name: newPromoName.trim(),
+          discountType: newPromoType,
+          discountValue: val,
+          isLimited: newPromoIsLimited,
+          maxUses: newPromoIsLimited && newPromoMaxUses ? parseInt(newPromoMaxUses, 10) : null,
+          isActive: newPromoIsActive
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setPromoSuccess('Promo code created successfully!');
+        setNewPromoCode('');
+        setNewPromoName('');
+        setNewPromoValue('');
+        setNewPromoIsLimited(false);
+        setNewPromoMaxUses('');
+        fetchPromoCodes();
+      } else {
+        setPromoError(data.error || 'Failed to create promo code');
+      }
+    } catch (err: any) {
+      setPromoError(err.message || 'Network error');
+    } finally {
+      setCreatingPromo(false);
+    }
+  };
+
+  const handleTogglePromo = async (id: string) => {
+    try {
+      const token = sessionStorage.getItem('staffAuthToken') || '';
+      const res = await fetch(`/api/promo-codes/${id}/toggle`, {
+        method: 'PUT',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        setPromoCodes(prev => prev.map(p => p.id === id ? { ...p, isActive: !p.isActive } : p));
+      }
+    } catch (err: any) {
+      alert('Failed to toggle status: ' + err.message);
+    }
+  };
+
+  const handleDeletePromo = async (id: string, code: string) => {
+    if (!window.confirm(`Are you sure you want to delete promo code "${code}"?`)) return;
+    try {
+      const token = sessionStorage.getItem('staffAuthToken') || '';
+      const res = await fetch(`/api/promo-codes/${id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        setPromoCodes(prev => prev.filter(p => p.id !== id));
+      }
+    } catch (err: any) {
+      alert('Failed to delete promo code: ' + err.message);
+    }
+  };
 
   const handlePasswordChange = (e: React.FormEvent) => {
     e.preventDefault();
@@ -216,6 +327,9 @@ export default function SettingsPage() {
           <button onClick={() => setActiveTab('fees')} className={`text-left px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-1.5 ${activeTab === 'fees' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-50'}`}><IndianRupee className="w-3.5 h-3.5" /> Fee Decider</button>
           <button onClick={() => setActiveTab('google')} className={`text-left px-4 py-2 rounded-lg text-sm font-medium ${activeTab === 'google' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-50'}`}>Google Meet</button>
           <button onClick={() => setActiveTab('notifications')} className={`text-left px-4 py-2 rounded-lg text-sm font-medium ${activeTab === 'notifications' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-50'}`}>Notifications</button>
+          {userRole === 'admin' && (
+            <button onClick={() => { setActiveTab('promos'); fetchPromoCodes(); }} className={`text-left px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-1.5 ${activeTab === 'promos' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-50'}`}><Tag className="w-3.5 h-3.5" /> Promo Codes</button>
+          )}
         </div>
 
         <div className="flex-1 bg-white rounded-xl shadow-sm border border-slate-200 p-8 min-h-[500px]">
@@ -868,6 +982,234 @@ export default function SettingsPage() {
                   className="w-full h-32 px-4 py-3 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500" 
                   placeholder="doctor@example.com, staff@example.com"
                 />
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'promos' && userRole === 'admin' && (
+            <div className="space-y-6">
+              <div className="flex items-center justify-between pb-4 border-b border-slate-200">
+                <div>
+                  <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                    <Tag className="w-5 h-5 text-indigo-600" /> Discounts & Promo Codes
+                  </h3>
+                  <p className="text-sm text-slate-500 mt-1">
+                    Create and manage discount promo codes applicable during appointment checkout.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={fetchPromoCodes}
+                  className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-colors"
+                >
+                  <RefreshCw className={cn("w-3.5 h-3.5", loadingPromoCodes && "animate-spin")} /> Refresh
+                </button>
+              </div>
+
+              {promoError && (
+                <div className="p-3.5 bg-rose-50 text-rose-700 border border-rose-200 rounded-xl text-sm flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" /> {promoError}
+                </div>
+              )}
+
+              {promoSuccess && (
+                <div className="p-3.5 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-xl text-sm flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" /> {promoSuccess}
+                </div>
+              )}
+
+              {/* Create Promo Code Card */}
+              <form onSubmit={handleCreatePromoCode} className="bg-slate-50 border border-slate-200 rounded-xl p-5 space-y-4">
+                <h4 className="font-bold text-slate-800 text-sm uppercase tracking-wider">Create New Promo Code</h4>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">Promo Code *</label>
+                    <input
+                      type="text"
+                      value={newPromoCode}
+                      onChange={e => setNewPromoCode(e.target.value.toUpperCase())}
+                      placeholder="e.g. WELCOME50"
+                      className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-lg text-sm font-mono uppercase tracking-wider focus:ring-2 focus:ring-indigo-500 outline-none"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">Promo Code Name *</label>
+                    <input
+                      type="text"
+                      value={newPromoName}
+                      onChange={e => setNewPromoName(e.target.value)}
+                      placeholder="e.g. 50% Welcome Discount"
+                      className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">Discount Type *</label>
+                    <div className="flex bg-slate-200/80 p-1 rounded-lg">
+                      <button
+                        type="button"
+                        onClick={() => setNewPromoType('percent')}
+                        className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-colors flex items-center justify-center gap-1 ${
+                          newPromoType === 'percent' ? "bg-white text-indigo-700 shadow-sm" : "text-slate-600 hover:text-slate-800"
+                        }`}
+                      >
+                        <Percent className="w-3.5 h-3.5" /> Percentage (%)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setNewPromoType('fixed')}
+                        className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-colors flex items-center justify-center gap-1 ${
+                          newPromoType === 'fixed' ? "bg-white text-indigo-700 shadow-sm" : "text-slate-600 hover:text-slate-800"
+                        }`}
+                      >
+                        <IndianRupee className="w-3.5 h-3.5" /> Flat Amount (₹)
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Discount Value ({newPromoType === 'percent' ? '%' : '₹'}) *
+                    </label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-2.5 text-slate-400 font-bold text-sm">
+                        {newPromoType === 'percent' ? '%' : '₹'}
+                      </span>
+                      <input
+                        type="number"
+                        min="1"
+                        max={newPromoType === 'percent' ? '100' : undefined}
+                        step="any"
+                        value={newPromoValue}
+                        onChange={e => setNewPromoValue(e.target.value)}
+                        placeholder={newPromoType === 'percent' ? 'e.g. 20' : 'e.g. 50'}
+                        className="w-full pl-8 pr-3.5 py-2.5 bg-white border border-slate-200 rounded-lg text-sm font-bold text-slate-800 focus:ring-2 focus:ring-indigo-500 outline-none"
+                        required
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-slate-200">
+                  <div className="space-y-2">
+                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={newPromoIsLimited}
+                        onChange={e => setNewPromoIsLimited(e.target.checked)}
+                        className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500"
+                      />
+                      <span className="text-xs font-semibold text-slate-700">Limit total number of uses (Optional)</span>
+                    </label>
+
+                    {newPromoIsLimited && (
+                      <input
+                        type="number"
+                        min="1"
+                        value={newPromoMaxUses}
+                        onChange={e => setNewPromoMaxUses(e.target.value)}
+                        placeholder="Maximum number of uses (e.g. 100)"
+                        className="w-full px-3.5 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                        required={newPromoIsLimited}
+                      />
+                    )}
+                  </div>
+
+                  <div className="flex items-center justify-between sm:justify-end gap-3 self-center">
+                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={newPromoIsActive}
+                        onChange={e => setNewPromoIsActive(e.target.checked)}
+                        className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500"
+                      />
+                      <span className="text-xs font-semibold text-slate-700">Active Immediately</span>
+                    </label>
+
+                    <button
+                      type="submit"
+                      disabled={creatingPromo || !newPromoCode || !newPromoName || !newPromoValue}
+                      className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg flex items-center gap-1.5 shadow-sm disabled:opacity-50 transition-colors"
+                    >
+                      {creatingPromo ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+                      Save Promo Code
+                    </button>
+                  </div>
+                </div>
+              </form>
+
+              {/* Existing Promo Codes List */}
+              <div className="space-y-3">
+                <h4 className="font-bold text-slate-800 text-sm uppercase tracking-wider">
+                  Active & Configured Promo Codes ({promoCodes.length})
+                </h4>
+
+                {promoCodes.length === 0 ? (
+                  <div className="text-center py-10 bg-slate-50 border border-dashed border-slate-200 rounded-xl text-xs text-slate-400">
+                    No promo codes created yet. Create your first discount code above!
+                  </div>
+                ) : (
+                  <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden bg-white">
+                    {promoCodes.map((p) => (
+                      <div key={p.id} className="p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2.5 flex-wrap">
+                            <span className="font-mono font-bold text-sm bg-indigo-50 text-indigo-700 border border-indigo-200 px-2.5 py-0.5 rounded">
+                              {p.code}
+                            </span>
+                            <span className="font-bold text-slate-800 text-sm">{p.name}</span>
+                            <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                              {p.discountDisplay || (p.discountType === 'percent' ? `${p.discountValue}% OFF` : `₹${p.discountValue / 100} OFF`)}
+                            </span>
+                            <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full border ${
+                              p.isActive ? "bg-teal-50 text-teal-800 border-teal-200" : "bg-slate-100 text-slate-500 border-slate-200"
+                            }`}>
+                              {p.isActive ? 'Active' : 'Inactive'}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-4 mt-2 text-xs text-slate-500">
+                            <span>
+                              Uses: <strong>{p.usedCount || 0}</strong> {p.isLimited ? `/ ${p.maxUses} max` : '(Unlimited)'}
+                            </span>
+                            <span>•</span>
+                            <span>Created {new Date(p.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => handleTogglePromo(p.id)}
+                            className={`px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors flex items-center gap-1.5 ${
+                              p.isActive
+                                ? "bg-amber-50 hover:bg-amber-100 text-amber-800 border-amber-200"
+                                : "bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-200"
+                            }`}
+                            title={p.isActive ? 'Deactivate promo code' : 'Activate promo code'}
+                          >
+                            {p.isActive ? 'Turn Off' : 'Turn On'}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleDeletePromo(p.id, p.code)}
+                            className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                            title="Delete promo code"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           )}
