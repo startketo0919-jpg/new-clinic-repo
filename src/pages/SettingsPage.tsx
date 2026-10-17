@@ -14,7 +14,20 @@ export default function SettingsPage() {
   const [delhiveryConfirmInput, setDelhiveryConfirmInput] = useState('');
   const [newWarehouseName, setNewWarehouseName] = useState('');
   const [newWarehousePincode, setNewWarehousePincode] = useState('');
-  const [userRole, setUserRole] = useState<string | null>(null);
+  const [userRole, setUserRole] = useState<string | null>(() => sessionStorage.getItem('userRole'));
+  const isDoctorOrAdmin = userRole === 'admin' || userRole === 'doctor';
+
+  const formatPromoDate = (d: any) => {
+    if (!d) return '—';
+    try {
+      const s = typeof d === 'string' ? d.replace(' ', 'T') : d;
+      const date = new Date(s);
+      if (isNaN(date.getTime())) return String(d).split('T')[0] || String(d);
+      return date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+    } catch {
+      return String(d);
+    }
+  };
 
   // Razorpay
   const [showRazorpayUnlocked, setShowRazorpayUnlocked] = useState(false);
@@ -297,8 +310,8 @@ export default function SettingsPage() {
     alert(`Sent ${successCount} / ${lines.length} messages.`);
   };
 
-  if (userRole !== 'admin') {
-    return <div className="p-10 text-center text-red-500">Access Denied. Admins only.</div>;
+  if (userRole && !isDoctorOrAdmin) {
+    return <div className="p-10 text-center text-red-500">Access Denied. Admins and Doctors only.</div>;
   }
 
   return (
@@ -328,7 +341,7 @@ export default function SettingsPage() {
           <button onClick={() => setActiveTab('fees')} className={`text-left px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-1.5 ${activeTab === 'fees' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-50'}`}><IndianRupee className="w-3.5 h-3.5" /> Fee Decider</button>
           <button onClick={() => setActiveTab('google')} className={`text-left px-4 py-2 rounded-lg text-sm font-medium ${activeTab === 'google' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-50'}`}>Google Meet</button>
           <button onClick={() => setActiveTab('notifications')} className={`text-left px-4 py-2 rounded-lg text-sm font-medium ${activeTab === 'notifications' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-50'}`}>Notifications</button>
-          {userRole === 'admin' && (
+          {isDoctorOrAdmin && (
             <button onClick={() => { setActiveTab('promos'); fetchPromoCodes(); }} className={`text-left px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-1.5 ${activeTab === 'promos' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-50'}`}><Tag className="w-3.5 h-3.5" /> Promo Codes</button>
           )}
         </div>
@@ -987,7 +1000,7 @@ export default function SettingsPage() {
             </div>
           )}
 
-          {activeTab === 'promos' && userRole === 'admin' && (
+          {activeTab === 'promos' && isDoctorOrAdmin && (
             <div className="space-y-6">
               <div className="flex items-center justify-between pb-4 border-b border-slate-200">
                 <div>
@@ -1003,7 +1016,7 @@ export default function SettingsPage() {
                   onClick={fetchPromoCodes}
                   className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-colors"
                 >
-                  <RefreshCw className={cn("w-3.5 h-3.5", loadingPromoCodes && "animate-spin")} /> Refresh
+                  <RefreshCw className={`w-3.5 h-3.5 ${loadingPromoCodes ? "animate-spin" : ""}`} /> Refresh
                 </button>
               </div>
 
@@ -1166,7 +1179,7 @@ export default function SettingsPage() {
                             </span>
                             <span className="font-bold text-slate-800 text-sm">{p.name}</span>
                             <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
-                              {p.discountDisplay || (p.discountType === 'percent' ? `${p.discountValue}% OFF` : `₹${p.discountValue / 100} OFF`)}
+                              {p.discountDisplay || (p.discountType === 'percent' ? `${p.discountValue || 0}% OFF` : `₹${Number(p.discountValue || 0) / 100} OFF`)}
                             </span>
                             <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full border ${
                               p.isActive ? "bg-teal-50 text-teal-800 border-teal-200" : "bg-slate-100 text-slate-500 border-slate-200"
@@ -1180,7 +1193,7 @@ export default function SettingsPage() {
                               Uses: <strong>{p.usedCount || 0}</strong> {p.isLimited ? `/ ${p.maxUses} max` : '(Unlimited)'}
                             </span>
                             <span>•</span>
-                            <span>Created {new Date(p.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
+                            <span>Created {formatPromoDate(p.createdAt)}</span>
                           </div>
                         </div>
 

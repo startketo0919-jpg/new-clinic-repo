@@ -3764,8 +3764,8 @@ app.post('/api/appointments/history', async (req, res) => {
   }
 });
 
-// ===== SPECIAL FEE CONCESSION WHITELIST (Doctor & Admin) =====
-app.get('/api/special-fee-patients', requireDoctorOrAdminAuth, async (req: AuthRequest, res) => {
+// ===== SPECIAL FEE CONCESSION WHITELIST (Admin, Doctor & Staff) =====
+app.get('/api/special-fee-patients', requireStaffAuth, async (req: AuthRequest, res) => {
   try {
     const [rows]: any = await pool.query(
       `SELECT id, phone, patient_name as patientName, notes, fee_type as feeType, is_used as isUsed, used_at as usedAt, used_appointment_id as usedAppointmentId, created_by as createdBy, created_at as createdAt 
@@ -3782,7 +3782,7 @@ app.get('/api/special-fee-patients', requireDoctorOrAdminAuth, async (req: AuthR
   }
 });
 
-app.post('/api/special-fee-patients', requireDoctorOrAdminAuth, async (req: AuthRequest, res) => {
+app.post('/api/special-fee-patients', requireStaffAuth, async (req: AuthRequest, res) => {
   try {
     const { phone, patientName, notes } = req.body;
     const cleanPhone = String(phone || '').replace(/\D/g, '').slice(-10);
@@ -3813,7 +3813,7 @@ app.post('/api/special-fee-patients', requireDoctorOrAdminAuth, async (req: Auth
   }
 });
 
-app.delete('/api/special-fee-patients/:id', requireDoctorOrAdminAuth, async (req: AuthRequest, res) => {
+app.delete('/api/special-fee-patients/:id', requireStaffAuth, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
     await pool.query(`DELETE FROM special_fee_patients WHERE id = ?`, [id]);
@@ -3910,8 +3910,8 @@ app.get('/api/custom-booking-links/validate/:token', async (req, res) => {
   }
 });
 
-// ===== PROMO CODES (Admin only) =====
-app.get('/api/promo-codes', requireAdminAuth, async (req: AuthRequest, res) => {
+// ===== PROMO CODES (Admin & Doctor) =====
+app.get('/api/promo-codes', requireDoctorOrAdminAuth, async (req: AuthRequest, res) => {
   try {
     const [rows]: any = await pool.query(
       `SELECT id, code, name, discount_type as discountType, discount_value as discountValue, is_limited as isLimited, max_uses as maxUses, used_count as usedCount, is_active as isActive, created_at as createdAt 
@@ -3930,7 +3930,7 @@ app.get('/api/promo-codes', requireAdminAuth, async (req: AuthRequest, res) => {
   }
 });
 
-app.post('/api/promo-codes', requireAdminAuth, async (req: AuthRequest, res) => {
+app.post('/api/promo-codes', requireDoctorOrAdminAuth, async (req: AuthRequest, res) => {
   try {
     const { code, name, discountType, discountValue, isLimited, maxUses, isActive } = req.body;
     if (!code || !name || !discountType || discountValue === undefined) {
@@ -3980,7 +3980,7 @@ app.post('/api/promo-codes', requireAdminAuth, async (req: AuthRequest, res) => 
   }
 });
 
-app.put('/api/promo-codes/:id/toggle', requireAdminAuth, async (req: AuthRequest, res) => {
+app.put('/api/promo-codes/:id/toggle', requireDoctorOrAdminAuth, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
     await pool.query(`UPDATE promo_codes SET is_active = NOT is_active WHERE id = ?`, [id]);
@@ -3990,7 +3990,7 @@ app.put('/api/promo-codes/:id/toggle', requireAdminAuth, async (req: AuthRequest
   }
 });
 
-app.delete('/api/promo-codes/:id', requireAdminAuth, async (req: AuthRequest, res) => {
+app.delete('/api/promo-codes/:id', requireDoctorOrAdminAuth, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
     await pool.query(`DELETE FROM promo_codes WHERE id = ?`, [id]);
