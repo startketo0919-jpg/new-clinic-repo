@@ -2700,17 +2700,30 @@ app.get('/api/appointments/available-slots', async (req, res) => {
       return res.status(400).json({ error: 'Invalid date format. Use YYYY-MM-DD' });
     }
     
-    const targetDate = new Date(date + 'T00:00:00+05:30');
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    // Parse date components safely in UTC at noon to prevent timezone shifts
+    const [y, m, d] = date.split('-').map(Number);
+    const dateUtcObj = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
     
-    if (targetDate < today) return res.status(400).json({ error: 'Cannot book past dates' });
-    if (targetDate.getDay() === 3) return res.status(400).json({ error: 'Clinic is closed on Wednesdays' });
+    // Day of week: 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
+    if (dateUtcObj.getUTCDay() === 3) {
+      return res.status(400).json({ error: 'Clinic is closed on Wednesdays' });
+    }
+
+    // Current date in IST (Asia/Kolkata)
+    const nowIST = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const todayISTStr = nowIST.getFullYear() + '-' + String(nowIST.getMonth() + 1).padStart(2, '0') + '-' + String(nowIST.getDate()).padStart(2, '0');
     
-    // Max 30 days ahead
-    const maxDate = new Date(today);
-    maxDate.setDate(maxDate.getDate() + 30);
-    if (targetDate > maxDate) return res.status(400).json({ error: 'Cannot book more than 30 days ahead' });
+    if (date < todayISTStr) {
+      return res.status(400).json({ error: 'Cannot book past dates' });
+    }
+    
+    // Max 30 days ahead from today in IST
+    const maxIST = new Date(nowIST);
+    maxIST.setDate(maxIST.getDate() + 30);
+    const maxDateStr = maxIST.getFullYear() + '-' + String(maxIST.getMonth() + 1).padStart(2, '0') + '-' + String(maxIST.getDate()).padStart(2, '0');
+    if (date > maxDateStr) {
+      return res.status(400).json({ error: 'Cannot book more than 30 days ahead' });
+    }
     
     const allSlots = [
       { time: '11:00', end: '11:30', label: '11:00 AM' },
@@ -2732,15 +2745,16 @@ app.get('/api/appointments/available-slots', async (req, res) => {
     );
     const bookedSlots = new Set(booked.map((r: any) => r.time_slot));
     
-    // If today, filter out past slots
-    const nowIST = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    // If today in IST, filter out slots whose start time has already passed
+    const currentMinutes = nowIST.getHours() * 60 + nowIST.getMinutes();
+    const isToday = (date === todayISTStr);
+
     const slots = allSlots.map(slot => {
       let available = !bookedSlots.has(slot.time);
-      if (date === today.toISOString().split('T')[0]) {
-        const [h, m] = slot.time.split(':').map(Number);
-        const slotTime = new Date(nowIST);
-        slotTime.setHours(h, m, 0, 0);
-        if (slotTime <= nowIST) available = false;
+      if (isToday) {
+        const [sh, sm] = slot.time.split(':').map(Number);
+        const slotMinutes = sh * 60 + sm;
+        if (slotMinutes <= currentMinutes) available = false;
       }
       return { ...slot, available };
     });
