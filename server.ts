@@ -1979,8 +1979,9 @@ function calculateDaysAgo(dateVal: any): number {
 }
 
 // Helper: Check 7-day follow-up eligibility across all sources
-// Rule: ONLY patients with COMPLETED appointments within the follow-up window are eligible!
+// Rule: ONLY patients whose LAST COMPLETED PAID consultation was within the follow-up window are eligible!
 // Cancelled, deleted, rescheduled, or uncompleted confirmed appointments must NEVER qualify.
+// Free follow-up appointments must NEVER extend or reset the follow-up window.
 async function checkFollowUpEligibility(
   phone: string, 
   freeDays: number, 
@@ -2000,18 +2001,23 @@ async function checkFollowUpEligibility(
   const cleanPid = (pid || '').trim();
   const cleanName = (patientName || '').trim();
   
+  let lastExpiredPaidVisit: any = null;
+
   if (cleanPhone.length === 10 || cleanPid) {
-    // 1. Primary Check: Previous COMPLETED online video consultation
-    // Strictly LOWER(status) = 'completed'
+    // 1. Primary Check: Previous COMPLETED PAID online video consultation
+    // Strictly LOWER(status) = 'completed' AND is_follow_up_free = FALSE AND payment_status = 'paid' AND COALESCE(payment_amount, 0) > 0
     try {
       let query = `
-        SELECT appointment_date, updated_at, created_at, health_concern, health_concern_detail, patient_name, clinic_id 
+        SELECT appointment_date, updated_at, created_at, health_concern, health_concern_detail, patient_name, clinic_id, payment_amount 
         FROM online_appointments 
         WHERE (
           (phone = ? OR (LENGTH(phone) >= 10 AND RIGHT(phone, 10) = ?))
           OR (? != '' AND clinic_id IS NOT NULL AND clinic_id != '' AND clinic_id = ?)
         )
         AND LOWER(status) = 'completed'
+        AND is_follow_up_free = FALSE
+        AND payment_status = 'paid'
+        AND COALESCE(payment_amount, 0) > 0
       `;
       const params: any[] = [cleanPhone, cleanPhone, cleanPid, cleanPid];
       if (cleanName) {
@@ -2025,13 +2031,16 @@ async function checkFollowUpEligibility(
       // Fallback search without patientName if not found with exact name
       if (onlineRows.length === 0 && cleanName) {
         const [fallbackRows]: any = await pool.query(
-          `SELECT appointment_date, updated_at, created_at, health_concern, health_concern_detail, patient_name, clinic_id 
+          `SELECT appointment_date, updated_at, created_at, health_concern, health_concern_detail, patient_name, clinic_id, payment_amount 
            FROM online_appointments 
            WHERE (
              (phone = ? OR (LENGTH(phone) >= 10 AND RIGHT(phone, 10) = ?))
              OR (? != '' AND clinic_id IS NOT NULL AND clinic_id != '' AND clinic_id = ?)
            )
            AND LOWER(status) = 'completed'
+           AND is_follow_up_free = FALSE
+           AND payment_status = 'paid'
+           AND COALESCE(payment_amount, 0) > 0
            ORDER BY COALESCE(appointment_date, DATE(updated_at), DATE(created_at)) DESC, updated_at DESC, created_at DESC LIMIT 1`,
           [cleanPhone, cleanPhone, cleanPid, cleanPid]
         );
@@ -2042,8 +2051,16 @@ async function checkFollowUpEligibility(
         const row = onlineRows[0];
         const dateVal = row.appointment_date || row.updated_at || row.created_at;
         const daysAgo = calculateDaysAgo(dateVal);
+        const displayDate = row.appointment_date || (row.updated_at ? new Date(row.updated_at).toISOString().split('T')[0] : '');
+        lastExpiredPaidVisit = {
+          lastDate: displayDate,
+          lastHealthConcern: row.health_concern,
+          lastHealthConcernDetail: row.health_concern_detail,
+          lastPatientName: row.patient_name,
+          clinicId: row.clinic_id
+        };
+
         if (daysAgo <= freeDays) {
-          const displayDate = row.appointment_date || (row.updated_at ? new Date(row.updated_at).toISOString().split('T')[0] : '');
           return { 
             isEligible: true, 
             lastDate: displayDate, 
@@ -2060,50 +2077,55 @@ async function checkFollowUpEligibility(
     }
 
     // 2. Secondary Check: Physical in-clinic COMPLETED visits from patient_registry
+    // Uses last_paid_visit to prevent free follow-ups from resetting the window.
     try {
       let regQuery = `
-        SELECT clinic_id, full_name, last_visited 
+        SELECT clinic_id, full_name, last_paid_visit, last_visited 
         FROM patient_registry 
         WHERE (
           (phone = ? OR (LENGTH(phone) >= 10 AND RIGHT(phone, 10) = ?))
           OR (? != '' AND clinic_id IS NOT NULL AND clinic_id != '' AND clinic_id = ?)
         )
-        AND last_visited IS NOT NULL
+        AND (last_paid_visit IS NOT NULL OR last_visited IS NOT NULL)
       `;
       const regParams: any[] = [cleanPhone, cleanPhone, cleanPid, cleanPid];
       if (cleanName) {
         regQuery += ` AND LOWER(TRIM(full_name)) = LOWER(TRIM(?))`;
         regParams.push(cleanName);
       }
-      regQuery += ` ORDER BY last_visited DESC LIMIT 1`;
+      regQuery += ` ORDER BY COALESCE(last_paid_visit, last_visited) DESC LIMIT 1`;
 
       let [regRows]: any = await pool.query(regQuery, regParams);
       if (regRows.length === 0 && cleanName) {
         const [fallbackReg]: any = await pool.query(
-          `SELECT clinic_id, full_name, last_visited 
+          `SELECT clinic_id, full_name, last_paid_visit, last_visited 
            FROM patient_registry 
            WHERE (
              (phone = ? OR (LENGTH(phone) >= 10 AND RIGHT(phone, 10) = ?))
              OR (? != '' AND clinic_id IS NOT NULL AND clinic_id != '' AND clinic_id = ?)
            )
-           AND last_visited IS NOT NULL 
-           ORDER BY last_visited DESC LIMIT 1`,
+           AND (last_paid_visit IS NOT NULL OR last_visited IS NOT NULL)
+           ORDER BY COALESCE(last_paid_visit, last_visited) DESC LIMIT 1`,
           [cleanPhone, cleanPhone, cleanPid, cleanPid]
         );
         regRows = fallbackReg;
       }
 
-      if (regRows.length > 0 && regRows[0].last_visited) {
-        const daysAgo = calculateDaysAgo(regRows[0].last_visited);
-        if (daysAgo <= freeDays) {
-          const lastDate = new Date(regRows[0].last_visited);
-          return { 
-            isEligible: true, 
-            lastDate: !isNaN(lastDate.getTime()) ? lastDate.toISOString().split('T')[0] : '', 
-            lastPatientName: regRows[0].full_name,
-            clinicId: regRows[0].clinic_id,
-            source: 'patient_registry' 
-          };
+      if (regRows.length > 0) {
+        // If the patient has online appointment history, NEVER let last_visited (which may be from a free follow-up) override.
+        const regTargetDate = regRows[0].last_paid_visit || (lastExpiredPaidVisit ? null : regRows[0].last_visited);
+        if (regTargetDate) {
+          const daysAgo = calculateDaysAgo(regTargetDate);
+          if (daysAgo <= freeDays) {
+            const lastDate = new Date(regTargetDate);
+            return { 
+              isEligible: true, 
+              lastDate: !isNaN(lastDate.getTime()) ? lastDate.toISOString().split('T')[0] : '', 
+              lastPatientName: regRows[0].full_name,
+              clinicId: regRows[0].clinic_id,
+              source: 'patient_registry' 
+            };
+          }
         }
       }
     } catch (e) {
@@ -2120,6 +2142,7 @@ async function checkFollowUpEligibility(
           OR (? != '' AND clinic_id IS NOT NULL AND clinic_id != '' AND clinic_id = ?)
         )
         AND LOWER(status) = 'completed'
+        AND (visit_type IS NULL OR visit_type != 'Follow-up')
       `;
       const queueParams: any[] = [cleanPhone, cleanPhone, cleanPid, cleanPid];
       if (cleanName) {
@@ -2138,6 +2161,7 @@ async function checkFollowUpEligibility(
              OR (? != '' AND clinic_id IS NOT NULL AND clinic_id != '' AND clinic_id = ?)
            )
            AND LOWER(status) = 'completed' 
+           AND (visit_type IS NULL OR visit_type != 'Follow-up')
            ORDER BY COALESCE(completed_time, check_in_time) DESC LIMIT 1`,
           [cleanPhone, cleanPhone, cleanPid, cleanPid]
         );
@@ -2172,7 +2196,14 @@ async function checkFollowUpEligibility(
     }
   }
 
-  return { isEligible: false };
+  return { 
+    isEligible: false,
+    lastDate: lastExpiredPaidVisit?.lastDate,
+    lastHealthConcern: lastExpiredPaidVisit?.lastHealthConcern,
+    lastHealthConcernDetail: lastExpiredPaidVisit?.lastHealthConcernDetail,
+    lastPatientName: lastExpiredPaidVisit?.lastPatientName,
+    clinicId: lastExpiredPaidVisit?.clinicId
+  };
 }
 
 app.post('/api/appointments/profiles-by-phone', async (req, res) => {
@@ -2202,10 +2233,10 @@ app.post('/api/appointments/profiles-by-phone', async (req, res) => {
     }
 
     const [registryPatients]: any = await pool.query(
-      `SELECT clinic_id, full_name, phone, email, age, gender, last_visited, first_visit
+      `SELECT clinic_id, full_name, phone, email, age, gender, last_visited, last_paid_visit, first_visit
        FROM patient_registry 
        WHERE phone = ? OR (LENGTH(phone) >= 10 AND RIGHT(phone, 10) = ?)
-       ORDER BY last_visited DESC, first_visit DESC`,
+       ORDER BY COALESCE(last_paid_visit, last_visited) DESC, first_visit DESC`,
       [cleanPhone, cleanPhone]
     );
 
@@ -2231,6 +2262,7 @@ app.post('/api/appointments/profiles-by-phone', async (req, res) => {
         age: rp.age || null,
         gender: rp.gender || '',
         email: rp.email || '',
+        registryLastPaidVisit: rp.last_paid_visit,
         registryLastVisit: rp.last_visited
       });
     }
@@ -2246,6 +2278,7 @@ app.post('/api/appointments/profiles-by-phone', async (req, res) => {
         age: op.age || null,
         gender: op.gender || '',
         email: op.email || '',
+        registryLastPaidVisit: null,
         registryLastVisit: null
       });
     }
@@ -2253,13 +2286,17 @@ app.post('/api/appointments/profiles-by-phone', async (req, res) => {
     const todayStr = new Date().toISOString().split('T')[0];
     
     for (const p of profiles) {
+      // Find the last completed PAID normal appointment (strictly excluding free follow-ups)
       const [recentApt]: any = await pool.query(
-        `SELECT appointment_date, updated_at, health_concern, health_concern_detail, clinic_id
+        `SELECT appointment_date, updated_at, created_at, health_concern, health_concern_detail, clinic_id, payment_amount
          FROM online_appointments 
          WHERE ((phone = ? OR (LENGTH(phone) >= 10 AND RIGHT(phone, 10) = ?)) OR (clinic_id IS NOT NULL AND clinic_id != '' AND clinic_id = ?))
          AND LOWER(TRIM(patient_name)) = LOWER(TRIM(?))
          AND LOWER(status) = 'completed'
-         ORDER BY COALESCE(appointment_date, DATE(updated_at)) DESC, updated_at DESC LIMIT 1`,
+         AND is_follow_up_free = FALSE
+         AND payment_status = 'paid'
+         AND COALESCE(payment_amount, 0) > 0
+         ORDER BY COALESCE(appointment_date, DATE(updated_at), DATE(created_at)) DESC, updated_at DESC, created_at DESC LIMIT 1`,
         [cleanPhone, cleanPhone, p.pid || '___NONE___', p.name]
       );
 
@@ -2270,32 +2307,55 @@ app.post('/api/appointments/profiles-by-phone', async (req, res) => {
 
       if (recentApt && recentApt.length > 0) {
         const rDate = recentApt[0].appointment_date;
-        const uDate = recentApt[0].updated_at;
+        const uDate = recentApt[0].updated_at || recentApt[0].created_at;
         
         if (rDate) {
           lastDate = rDate instanceof Date ? rDate.toISOString().substring(0, 10) : rDate;
         } else if (uDate) {
-          lastDate = uDate instanceof Date ? uDate.toISOString().substring(0, 10) : uDate.substring(0, 10);
+          lastDate = uDate instanceof Date ? uDate.toISOString().substring(0, 10) : String(uDate).substring(0, 10);
         }
         
         lastHealthConcern = recentApt[0].health_concern || null;
         lastHealthConcernDetail = recentApt[0].health_concern_detail || null;
       }
 
-      let regLastDate = p.registryLastVisit;
-      if (regLastDate instanceof Date) {
-        regLastDate = regLastDate.toISOString().substring(0, 10);
+      // If health concern wasn't on the paid appointment, look up latest completed appointment
+      if (!lastHealthConcern) {
+        try {
+          const [anyApt]: any = await pool.query(
+            `SELECT health_concern, health_concern_detail FROM online_appointments
+             WHERE ((phone = ? OR (LENGTH(phone) >= 10 AND RIGHT(phone, 10) = ?)) OR (clinic_id IS NOT NULL AND clinic_id != '' AND clinic_id = ?))
+             AND LOWER(TRIM(patient_name)) = LOWER(TRIM(?)) AND LOWER(status) = 'completed'
+             ORDER BY COALESCE(appointment_date, DATE(updated_at), DATE(created_at)) DESC, updated_at DESC LIMIT 1`,
+            [cleanPhone, cleanPhone, p.pid || '___NONE___', p.name]
+          );
+          if (anyApt && anyApt.length > 0) {
+            lastHealthConcern = anyApt[0].health_concern || null;
+            lastHealthConcernDetail = anyApt[0].health_concern_detail || null;
+          }
+        } catch (_) {}
       }
+
+      let regPaidDate = p.registryLastPaidVisit;
+      if (regPaidDate instanceof Date) {
+        regPaidDate = regPaidDate.toISOString().substring(0, 10);
+      }
+      // Only fallback to registryLastVisit if the patient never had an online completed appointment
+      let regFallbackDate = (!recentApt || recentApt.length === 0) ? p.registryLastVisit : null;
+      if (regFallbackDate instanceof Date) {
+        regFallbackDate = regFallbackDate.toISOString().substring(0, 10);
+      }
+      const effectiveRegDate = regPaidDate || regFallbackDate;
       
       const aptDays = lastDate ? calculateDaysAgo(lastDate) : Infinity;
-      const regDays = regLastDate ? calculateDaysAgo(regLastDate) : Infinity;
+      const regDays = effectiveRegDate ? calculateDaysAgo(effectiveRegDate) : Infinity;
       
       let bestDate = null;
       if (aptDays <= regDays && aptDays !== Infinity) {
         bestDate = lastDate;
         daysAgo = aptDays;
       } else if (regDays < aptDays && regDays !== Infinity) {
-        bestDate = regLastDate;
+        bestDate = effectiveRegDate;
         daysAgo = regDays;
       }
 
@@ -2305,6 +2365,7 @@ app.post('/api/appointments/profiles-by-phone', async (req, res) => {
       
       p.isFollowUpEligible = daysAgo <= followUpDays;
       p.followUpDaysRemaining = p.isFollowUpEligible ? (followUpDays - daysAgo) : 0;
+      delete p.registryLastPaidVisit;
       delete p.registryLastVisit;
 
       const [activeApt]: any = await pool.query(
@@ -3240,17 +3301,35 @@ app.patch('/api/online-appointments/:id/complete', requireStaffAuth, async (req:
     const [aptRows]: any = await pool.query('SELECT * FROM online_appointments WHERE id = ?', [id]);
     await pool.query(`UPDATE online_appointments SET status = 'completed', updated_at = NOW() WHERE id = ?`, [id]);
     
-    // Also sync last_visited in patient_registry so medical records stay up to date
+    // Also sync last_visited and last_paid_visit in patient_registry so medical and billing records stay accurate
     if (aptRows.length > 0) {
       const apt = aptRows[0];
       const cleanPhone = (apt.phone || '').replace(/\D/g, '').slice(-10);
+      const isPaidVisit = !apt.is_follow_up_free && (Number(apt.payment_amount) > 0 || apt.payment_status === 'paid');
+      const paidAmount = Number(apt.payment_amount) || 0;
+
       if (apt.clinic_id) {
-        await pool.query(`UPDATE patient_registry SET last_visited = NOW() WHERE clinic_id = ?`, [apt.clinic_id]);
+        if (isPaidVisit) {
+          await pool.query(
+            `UPDATE patient_registry SET last_visited = NOW(), last_paid_visit = NOW(), last_paid_amount = ? WHERE clinic_id = ?`,
+            [paidAmount, apt.clinic_id]
+          );
+        } else {
+          // Free follow-up: update attendance (last_visited) only, preserve last_paid_visit & last_paid_amount!
+          await pool.query(`UPDATE patient_registry SET last_visited = NOW() WHERE clinic_id = ?`, [apt.clinic_id]);
+        }
       } else if (cleanPhone) {
-        await pool.query(
-          `UPDATE patient_registry SET last_visited = NOW() WHERE (phone = ? OR (LENGTH(phone) >= 10 AND RIGHT(phone, 10) = ?)) ${apt.patient_name ? 'AND LOWER(TRIM(full_name)) = LOWER(TRIM(?))' : ''}`,
-          apt.patient_name ? [cleanPhone, cleanPhone, apt.patient_name] : [cleanPhone, cleanPhone]
-        );
+        if (isPaidVisit) {
+          await pool.query(
+            `UPDATE patient_registry SET last_visited = NOW(), last_paid_visit = NOW(), last_paid_amount = ? WHERE (phone = ? OR (LENGTH(phone) >= 10 AND RIGHT(phone, 10) = ?)) ${apt.patient_name ? 'AND LOWER(TRIM(full_name)) = LOWER(TRIM(?))' : ''}`,
+            apt.patient_name ? [paidAmount, cleanPhone, cleanPhone, apt.patient_name] : [paidAmount, cleanPhone, cleanPhone]
+          );
+        } else {
+          await pool.query(
+            `UPDATE patient_registry SET last_visited = NOW() WHERE (phone = ? OR (LENGTH(phone) >= 10 AND RIGHT(phone, 10) = ?)) ${apt.patient_name ? 'AND LOWER(TRIM(full_name)) = LOWER(TRIM(?))' : ''}`,
+            apt.patient_name ? [cleanPhone, cleanPhone, apt.patient_name] : [cleanPhone, cleanPhone]
+          );
+        }
       }
     }
 

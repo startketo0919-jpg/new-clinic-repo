@@ -14,6 +14,8 @@ export async function initDb() {
       gender VARCHAR(20) NOT NULL,
       first_visit TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       last_visited TIMESTAMP NULL,
+      last_paid_visit TIMESTAMP NULL,
+      last_paid_amount INT DEFAULT NULL,
       follow_up_date TIMESTAMP NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`,
 
@@ -204,7 +206,9 @@ export async function initDb() {
     `ALTER TABLE settings ADD COLUMN IF NOT EXISTS follow_up_free_days INT DEFAULT 7;`,
     `ALTER TABLE settings ADD COLUMN IF NOT EXISTS follow_up_fee INT DEFAULT 0;`,
     `ALTER TABLE online_appointments ADD COLUMN IF NOT EXISTS age INT;`,
-    `ALTER TABLE online_appointments ADD COLUMN IF NOT EXISTS gender VARCHAR(20);`
+    `ALTER TABLE online_appointments ADD COLUMN IF NOT EXISTS gender VARCHAR(20);`,
+    `ALTER TABLE patient_registry ADD COLUMN IF NOT EXISTS last_paid_visit TIMESTAMP NULL;`,
+    `ALTER TABLE patient_registry ADD COLUMN IF NOT EXISTS last_paid_amount INT DEFAULT NULL;`
   ];
 
   for (const alterQ of alterSettingsQueries) {
@@ -221,6 +225,36 @@ export async function initDb() {
     } catch (err) {
       console.error("Error creating MySQL table:", err);
     }
+  }
+
+  // Backfill last_paid_visit & last_paid_amount for existing patient_registry records from completed paid appointments
+  try {
+    await pool.query(`
+      UPDATE patient_registry pr
+      JOIN (
+        SELECT clinic_id, 
+               MAX(COALESCE(appointment_date, DATE(updated_at), DATE(created_at))) as max_paid_date,
+               MAX(payment_amount) as max_paid_amt
+        FROM online_appointments
+        WHERE LOWER(status) = 'completed'
+          AND is_follow_up_free = FALSE
+          AND payment_status = 'paid'
+          AND COALESCE(payment_amount, 0) > 0
+          AND clinic_id IS NOT NULL AND clinic_id != ''
+        GROUP BY clinic_id
+      ) oa ON pr.clinic_id = oa.clinic_id
+      SET pr.last_paid_visit = oa.max_paid_date, pr.last_paid_amount = oa.max_paid_amt
+      WHERE pr.last_paid_visit IS NULL;
+    `);
+
+    // For in-clinic patients with no online appointments, backfill last_paid_visit from last_visited or first_visit
+    await pool.query(`
+      UPDATE patient_registry
+      SET last_paid_visit = COALESCE(last_visited, first_visit)
+      WHERE last_paid_visit IS NULL AND (last_visited IS NOT NULL OR first_visit IS NOT NULL);
+    `);
+  } catch (err) {
+    // Non-fatal backfill
   }
 
   // Ensure default settings row exists

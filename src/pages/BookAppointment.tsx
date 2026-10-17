@@ -801,7 +801,7 @@ END:VCALENDAR`;
                                   </span>
                                   {profile.isFollowUpEligible && (
                                     <span className="text-[10px] font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full border border-emerald-200 flex items-center gap-1">
-                                      <Sparkles className="w-3 h-3" /> Follow-up Window
+                                      <Sparkles className="w-3 h-3" /> Follow-up Window ({profile.followUpDaysRemaining}d left)
                                     </span>
                                   )}
                                 </div>

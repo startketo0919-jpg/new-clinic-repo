@@ -9,6 +9,8 @@ export const patientRegistry = mysqlTable("patient_registry", {
   gender: varchar("gender", { length: 20 }).notNull(),
   firstVisit: timestamp("first_visit").notNull().defaultNow(),
   lastVisited: timestamp("last_visited"),
+  lastPaidVisit: timestamp("last_paid_visit"),
+  lastPaidAmount: int("last_paid_amount"),
   followUpDate: timestamp("follow_up_date"),
 });
 
