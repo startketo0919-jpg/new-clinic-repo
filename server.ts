@@ -2740,6 +2740,9 @@ app.post('/api/appointments/create-order', async (req, res) => {
     let appliedPromoCode: string | null = null;
     let appliedDiscountPaise = 0;
     if (promoCode && typeof promoCode === 'string' && promoCode.trim().length > 0) {
+      if (customLink) {
+        return res.status(400).json({ error: 'Promo codes cannot be applied to custom fee booking links.' });
+      }
       const cleanCode = promoCode.trim().toUpperCase();
       const [pRows]: any = await pool.query(
         `SELECT * FROM promo_codes WHERE UPPER(code) = ? AND is_active = TRUE LIMIT 1`,
@@ -4080,7 +4083,10 @@ app.delete('/api/promo-codes/:id', requireDoctorOrAdminAuth, async (req: AuthReq
 // Public promo code validation for checkout
 app.post('/api/appointments/validate-promo', async (req, res) => {
   try {
-    const { code, currentFee, phone } = req.body;
+    const { code, currentFee, phone, customToken } = req.body;
+    if (customToken) {
+      return res.status(400).json({ error: 'Promo codes cannot be applied to custom fee booking links.' });
+    }
     if (!code || typeof code !== 'string') {
       return res.status(400).json({ error: 'Promo code is required.' });
     }

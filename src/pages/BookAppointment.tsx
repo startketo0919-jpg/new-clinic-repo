@@ -225,8 +225,8 @@ export default function BookAppointment() {
           ? (pricingConfig.sameConcernFee ?? pricingConfig.normalFee)
           : pricingConfig.normalFee);
 
-  // Promo code discount
-  const promoDiscount = appliedPromo ? appliedPromo.discountAmount : 0;
+  // Promo code discount (disallowed on custom fee links)
+  const promoDiscount = (appliedPromo && !customLink) ? appliedPromo.discountAmount : 0;
   const finalPayableFee = Math.max(0, baseFee - promoDiscount);
   const isFree = finalPayableFee === 0;
 
@@ -235,6 +235,10 @@ export default function BookAppointment() {
 
   // Promo code handlers
   const handleApplyPromo = async () => {
+    if (customLink || customToken) {
+      setPromoError('Promo codes cannot be applied to custom fee booking links.');
+      return;
+    }
     if (!promoInput.trim()) return;
     setPromoLoading(true);
     setPromoError('');
@@ -246,7 +250,8 @@ export default function BookAppointment() {
           code: promoInput.trim(), 
           currentFee: baseFee,
           phone: formData.phone,
-          patientName: formData.patientName 
+          patientName: formData.patientName,
+          customToken: customToken || undefined
         })
       });
       const data = await res.json();
@@ -573,7 +578,7 @@ export default function BookAppointment() {
           courierContact: formData.courierPhone,
           courierPincode: formData.courierPincode,
           customToken: customToken || undefined,
-          promoCode: appliedPromo?.code || undefined
+          promoCode: customToken ? undefined : (appliedPromo?.code || undefined)
         })
       });
       
@@ -1524,8 +1529,16 @@ END:VCALENDAR`;
                   </div>
                 </div>
 
-                {/* PROMO CODE & DISCOUNT SECTION */}
-                {!isFree && (
+                {/* Custom Fee Notice */}
+                {customLink && (
+                  <div className="bg-amber-50/80 border border-amber-200 rounded-xl p-4 mb-8 flex items-center gap-3 text-xs text-amber-800">
+                    <Tag className="w-4 h-4 text-amber-600 shrink-0" />
+                    <span>Special Custom Fee Link applied (₹{baseFee}). Additional promo codes cannot be applied to this consultation.</span>
+                  </div>
+                )}
+
+                {/* PROMO CODE & DISCOUNT SECTION (Not applicable on custom fee links) */}
+                {!isFree && !customLink && (
                   <div className="bg-white border border-slate-200 rounded-xl p-5 mb-8 shadow-sm">
                     <div className="flex items-center gap-2 mb-3">
                       <Tag className="w-4 h-4 text-teal-600" />
