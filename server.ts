@@ -2782,7 +2782,7 @@ app.post('/api/appointments/create-order', async (req, res) => {
       const cleanPatientPhone = phone ? String(phone).replace(/\D/g, '').slice(-10) : '';
       if (p.new_patients_only && cleanPatientPhone.length === 10) {
         const [existingReg]: any = await pool.query(
-          `SELECT id FROM patient_registry WHERE phone LIKE ? LIMIT 1`,
+          `SELECT clinic_id FROM patient_registry WHERE phone LIKE ? LIMIT 1`,
           [`%${cleanPatientPhone}%`]
         );
         const [existingApt]: any = await pool.query(
@@ -4141,7 +4141,7 @@ app.post('/api/appointments/validate-promo', async (req, res) => {
         });
       }
       const [existingReg]: any = await pool.query(
-        `SELECT id FROM patient_registry WHERE phone LIKE ? LIMIT 1`,
+        `SELECT clinic_id FROM patient_registry WHERE phone LIKE ? LIMIT 1`,
         [`%${cleanPatientPhone}%`]
       );
       const [existingApt]: any = await pool.query(
