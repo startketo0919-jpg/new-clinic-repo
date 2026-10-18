@@ -2674,7 +2674,11 @@ app.post('/api/appointments/create-order', async (req, res) => {
       if (cRows.length === 0) {
         return res.status(400).json({ error: 'This custom booking link is invalid, expired, or has already been used.' });
       }
-      customLink = cRows[0];
+      const cl = cRows[0];
+      if (cl.expires_at && new Date(cl.expires_at) < new Date()) {
+        return res.status(400).json({ error: 'This custom booking link has expired (custom links expire after 2 days).' });
+      }
+      customLink = cl;
     }
 
     // 2. Check special fee concession whitelist (walk-in / offline patient)
@@ -3894,7 +3898,8 @@ app.get('/api/custom-booking-links', requireDoctorOrAdminAuth, async (req: AuthR
       links: rows.map((r: any) => ({
         ...r,
         amount: r.amount / 100,
-        isUsed: Boolean(r.isUsed)
+        isUsed: Boolean(r.isUsed),
+        isExpired: !Boolean(r.isUsed) && r.expiresAt && new Date(r.expiresAt) < new Date()
       }))
     });
   } catch (err: any) {
@@ -3916,9 +3921,10 @@ app.post('/api/custom-booking-links', requireDoctorOrAdminAuth, async (req: Auth
     const createdBy = req.user?.username || req.user?.role || 'doctor';
     const cleanPhone = phone ? String(phone).replace(/\D/g, '').slice(-10) : null;
 
+    // Custom links automatically expire after 2 days (48 hours) if unused
     await pool.query(
-      `INSERT INTO custom_booking_links (id, token, patient_name, phone, amount, notes, is_used, created_by, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, FALSE, ?, NOW())`,
+      `INSERT INTO custom_booking_links (id, token, patient_name, phone, amount, notes, is_used, expires_at, created_by, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, FALSE, DATE_ADD(NOW(), INTERVAL 2 DAY), ?, NOW())`,
       [id, token, patientName ? String(patientName).trim() : null, cleanPhone, amountPaise, notes ? String(notes).trim() : null, createdBy]
     );
 
@@ -3954,7 +3960,7 @@ app.get('/api/custom-booking-links/validate/:token', async (req, res) => {
       return res.status(400).json({ valid: false, error: 'This custom booking link has already been used.' });
     }
     if (link.expires_at && new Date(link.expires_at) < new Date()) {
-      return res.status(400).json({ valid: false, error: 'This custom booking link has expired.' });
+      return res.status(400).json({ valid: false, error: 'This custom booking link has expired (custom links expire after 2 days).' });
     }
     res.json({
       valid: true,
@@ -3963,7 +3969,8 @@ app.get('/api/custom-booking-links/validate/:token', async (req, res) => {
       amountPaise: link.amount,
       patientName: link.patient_name || '',
       phone: link.phone || '',
-      notes: link.notes || ''
+      notes: link.notes || '',
+      expiresAt: link.expires_at
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });

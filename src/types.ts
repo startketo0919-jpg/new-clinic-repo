@@ -151,6 +151,7 @@ export interface CustomBookingLink {
   amount: number; // in paise
   notes?: string;
   isUsed: boolean;
+  isExpired?: boolean;
   usedAt?: string;
   usedAppointmentId?: string;
   expiresAt?: string;

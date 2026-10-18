@@ -306,6 +306,13 @@ export async function initDb() {
       SET last_paid_visit = COALESCE(last_visited, first_visit)
       WHERE last_paid_visit IS NULL AND (last_visited IS NOT NULL OR first_visit IS NOT NULL);
     `);
+
+    // Backfill 2-day expiry for existing custom booking links
+    await pool.query(`
+      UPDATE custom_booking_links
+      SET expires_at = DATE_ADD(created_at, INTERVAL 2 DAY)
+      WHERE expires_at IS NULL;
+    `);
   } catch (err) {
     // Non-fatal backfill
   }

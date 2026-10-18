@@ -248,7 +248,7 @@ As discussed, here is your special appointment booking link with customized cons
 {bookingUrl}
 
 Please click the link above, choose your convenient date & time slot, and confirm your consultation.
-_(Note: This is a secure one-time booking link created specifically for you)._
+_(Note: This is a secure one-time booking link valid for 2 days)._
 
 Warm regards,
 *Dr. Sunil Kumar BHMS*
@@ -1741,20 +1741,29 @@ Krishna Homoeopathic Clinic`;
                                   <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200">
                                     Used {l.usedAt ? format(new Date(l.usedAt), 'dd MMM yyyy') : ''}
                                   </span>
+                                ) : l.isExpired ? (
+                                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-200">
+                                    Expired (2-day limit exceeded)
+                                  </span>
                                 ) : (
                                   <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
-                                    Active (Unused)
+                                    Active (Valid 2 days)
                                   </span>
                                 )}
                               </div>
                               {l.notes && <div className="text-xs text-slate-500 mt-1 truncate">{l.notes}</div>}
                               <div className="text-[11px] text-slate-400 mt-1">
                                 Created {format(new Date(l.createdAt), 'dd MMM yyyy, hh:mm a')} by {l.createdBy || 'doctor'}
+                                {l.expiresAt && !l.isUsed && (
+                                  <span className="ml-2 text-slate-500">
+                                    • Expires: {format(new Date(l.expiresAt), 'dd MMM yyyy, hh:mm a')}
+                                  </span>
+                                )}
                               </div>
                             </div>
 
                             <div className="flex items-center gap-2 shrink-0">
-                              {!l.isUsed && (
+                              {!l.isUsed && !l.isExpired && (
                                 <button
                                   type="button"
                                   onClick={() => {
@@ -1778,7 +1787,7 @@ Krishna Homoeopathic Clinic`;
                                 </button>
                               )}
 
-                              {!l.isUsed && (
+                              {!l.isUsed && !l.isExpired && (
                                 <button
                                   type="button"
                                   onClick={() => copyToClipboard(linkUrl, l.id)}
@@ -1790,16 +1799,14 @@ Krishna Homoeopathic Clinic`;
                                 </button>
                               )}
 
-                              {!l.isUsed && (
-                                <button
-                                  type="button"
-                                  onClick={() => handleDeleteCustomLink(l.id)}
-                                  className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
-                                  title="Delete link"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
-                              )}
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteCustomLink(l.id)}
+                                className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                                title="Delete link"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
                             </div>
                           </div>
 
