@@ -2750,7 +2750,60 @@ app.post('/api/appointments/create-order', async (req, res) => {
       }
       const p = pRows[0];
       if (p.is_limited && p.used_count >= p.max_uses) {
-        return res.status(400).json({ error: 'This promo code usage limit has been reached.' });
+        return res.status(400).json({ error: 'This promo code total usage limit has been reached.' });
+      }
+
+      // Rule: Expiry Date & Time
+      if (p.expires_at) {
+        const expTime = new Date(p.expires_at).getTime();
+        if (!isNaN(expTime) && Date.now() > expTime) {
+          const expStr = new Date(p.expires_at).toLocaleString('en-IN', {
+            day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
+          });
+          return res.status(400).json({ error: `This promo code expired on ${expStr}.` });
+        }
+      }
+
+      // Rule: Minimum Order Amount
+      if (p.min_order_amount && p.min_order_amount > 0 && fee < p.min_order_amount) {
+        return res.status(400).json({
+          error: `This promo code requires a minimum consultation fee of ₹${p.min_order_amount / 100}.`
+        });
+      }
+
+      // Rule: New Patients Only
+      const cleanPatientPhone = phone ? String(phone).replace(/\D/g, '').slice(-10) : '';
+      if (p.new_patients_only && cleanPatientPhone.length === 10) {
+        const [existingReg]: any = await pool.query(
+          `SELECT id FROM patient_registry WHERE phone LIKE ? LIMIT 1`,
+          [`%${cleanPatientPhone}%`]
+        );
+        const [existingApt]: any = await pool.query(
+          `SELECT id FROM online_appointments WHERE phone LIKE ? AND LOWER(payment_status) IN ('paid', 'free') LIMIT 1`,
+          [`%${cleanPatientPhone}%`]
+        );
+        if (existingReg.length > 0 || existingApt.length > 0) {
+          return res.status(400).json({
+            error: 'This promo code is exclusively valid for new / first-time patients.'
+          });
+        }
+      }
+
+      // Rule: Max Uses per Mobile Number
+      if (p.max_uses_per_phone && p.max_uses_per_phone > 0 && cleanPatientPhone.length === 10) {
+        const [phoneUsage]: any = await pool.query(
+          `SELECT COUNT(*) as count FROM online_appointments 
+           WHERE phone LIKE ? AND UPPER(promo_code) = UPPER(?) AND LOWER(payment_status) IN ('paid', 'free')`,
+          [`%${cleanPatientPhone}%`, p.code]
+        );
+        const count = phoneUsage[0]?.count || 0;
+        if (count >= p.max_uses_per_phone) {
+          return res.status(400).json({
+            error: p.max_uses_per_phone === 1
+              ? 'This promo code can only be used once per mobile number.'
+              : `This promo code has already been used ${count} time(s) for this mobile number (Limit: ${p.max_uses_per_phone}).`
+          });
+        }
       }
 
       if (p.discount_type === 'percent') {
@@ -3866,7 +3919,7 @@ app.post('/api/custom-booking-links', requireDoctorOrAdminAuth, async (req: Auth
       [id, token, patientName ? String(patientName).trim() : null, cleanPhone, amountPaise, notes ? String(notes).trim() : null, createdBy]
     );
 
-    const bookingUrl = `https://app.drsunilkumarbhms.in/book?customToken=${token}`;
+    const bookingUrl = `https://app.drsunilkumarbhms.in/book-appointment?customToken=${token}`;
     res.json({ success: true, id, token, bookingUrl, amount: numAmount });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -3918,7 +3971,11 @@ app.get('/api/custom-booking-links/validate/:token', async (req, res) => {
 app.get('/api/promo-codes', requireDoctorOrAdminAuth, async (req: AuthRequest, res) => {
   try {
     const [rows]: any = await pool.query(
-      `SELECT id, code, name, discount_type as discountType, discount_value as discountValue, is_limited as isLimited, max_uses as maxUses, used_count as usedCount, is_active as isActive, created_at as createdAt 
+      `SELECT id, code, name, discount_type as discountType, discount_value as discountValue, 
+              is_limited as isLimited, max_uses as maxUses, used_count as usedCount, 
+              max_uses_per_phone as maxUsesPerPhone, new_patients_only as newPatientsOnly, 
+              expires_at as expiresAt, min_order_amount as minOrderAmount, 
+              is_active as isActive, created_at as createdAt 
        FROM promo_codes ORDER BY created_at DESC`
     );
     res.json({
@@ -3926,6 +3983,10 @@ app.get('/api/promo-codes', requireDoctorOrAdminAuth, async (req: AuthRequest, r
         ...r,
         isActive: Boolean(r.isActive),
         isLimited: Boolean(r.isLimited),
+        newPatientsOnly: Boolean(r.newPatientsOnly),
+        maxUsesPerPhone: r.maxUsesPerPhone || null,
+        expiresAt: r.expiresAt || null,
+        minOrderAmount: r.minOrderAmount ? r.minOrderAmount / 100 : null,
         discountDisplay: r.discountType === 'percent' ? `${r.discountValue}%` : `₹${r.discountValue / 100}`
       }))
     });
@@ -3936,7 +3997,11 @@ app.get('/api/promo-codes', requireDoctorOrAdminAuth, async (req: AuthRequest, r
 
 app.post('/api/promo-codes', requireDoctorOrAdminAuth, async (req: AuthRequest, res) => {
   try {
-    const { code, name, discountType, discountValue, isLimited, maxUses, isActive } = req.body;
+    const { 
+      code, name, discountType, discountValue, isLimited, maxUses, isActive,
+      maxUsesPerPhone, newPatientsOnly, expiresAt, minOrderAmount 
+    } = req.body;
+
     if (!code || !name || !discountType || discountValue === undefined) {
       return res.status(400).json({ error: 'Code, Name, Discount Type, and Discount Value are required.' });
     }
@@ -3970,12 +4035,20 @@ app.post('/api/promo-codes', requireDoctorOrAdminAuth, async (req: AuthRequest, 
     const storedVal = discountType === 'fixed' ? Math.round(numVal * 100) : Math.round(numVal);
     const limitBool = Boolean(isLimited);
     const maxU = limitBool && maxUses ? parseInt(String(maxUses), 10) : null;
+    const maxPhone = maxUsesPerPhone && parseInt(String(maxUsesPerPhone), 10) > 0 ? parseInt(String(maxUsesPerPhone), 10) : null;
+    const newOnly = Boolean(newPatientsOnly);
+    const minAmt = minOrderAmount && Number(minOrderAmount) > 0 ? Math.round(Number(minOrderAmount) * 100) : null;
+    let expDate: Date | null = null;
+    if (expiresAt) {
+      const d = new Date(expiresAt);
+      if (!isNaN(d.getTime())) expDate = d;
+    }
     const activeBool = isActive !== undefined ? Boolean(isActive) : true;
 
     await pool.query(
-      `INSERT INTO promo_codes (id, code, name, discount_type, discount_value, is_limited, max_uses, used_count, is_active, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, NOW())`,
-      [id, cleanCode, String(name).trim(), discountType, storedVal, limitBool, maxU, activeBool]
+      `INSERT INTO promo_codes (id, code, name, discount_type, discount_value, is_limited, max_uses, used_count, max_uses_per_phone, new_patients_only, expires_at, min_order_amount, is_active, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, NOW())`,
+      [id, cleanCode, String(name).trim(), discountType, storedVal, limitBool, maxU, maxPhone, newOnly, expDate, minAmt, activeBool]
     );
 
     res.json({ success: true, id, code: cleanCode, message: 'Promo code created successfully' });
@@ -4007,7 +4080,7 @@ app.delete('/api/promo-codes/:id', requireDoctorOrAdminAuth, async (req: AuthReq
 // Public promo code validation for checkout
 app.post('/api/appointments/validate-promo', async (req, res) => {
   try {
-    const { code, currentFee } = req.body;
+    const { code, currentFee, phone } = req.body;
     if (!code || typeof code !== 'string') {
       return res.status(400).json({ error: 'Promo code is required.' });
     }
@@ -4023,10 +4096,74 @@ app.post('/api/appointments/validate-promo', async (req, res) => {
 
     const p = rows[0];
     if (p.is_limited && p.used_count >= p.max_uses) {
-      return res.status(400).json({ error: 'Promo code usage limit has been reached.' });
+      return res.status(400).json({ error: 'This promo code total usage limit has been reached.' });
+    }
+
+    // Rule: Expiry Date & Time
+    if (p.expires_at) {
+      const expTime = new Date(p.expires_at).getTime();
+      if (!isNaN(expTime) && Date.now() > expTime) {
+        const expStr = new Date(p.expires_at).toLocaleString('en-IN', {
+          day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
+        });
+        return res.status(400).json({ error: `This promo code expired on ${expStr}.` });
+      }
     }
 
     const currentFeePaise = currentFee !== undefined ? Math.round(Number(currentFee) * 100) : 19900;
+
+    // Rule: Minimum Order Amount
+    if (p.min_order_amount && p.min_order_amount > 0 && currentFeePaise < p.min_order_amount) {
+      return res.status(400).json({
+        error: `This promo code requires a minimum consultation fee of ₹${p.min_order_amount / 100}.`
+      });
+    }
+
+    // Rule: New Patients Only
+    const cleanPatientPhone = phone ? String(phone).replace(/\D/g, '').slice(-10) : '';
+    if (p.new_patients_only) {
+      if (!cleanPatientPhone || cleanPatientPhone.length !== 10) {
+        return res.status(400).json({
+          error: 'Please enter a valid 10-digit mobile number first to apply this promo code.'
+        });
+      }
+      const [existingReg]: any = await pool.query(
+        `SELECT id FROM patient_registry WHERE phone LIKE ? LIMIT 1`,
+        [`%${cleanPatientPhone}%`]
+      );
+      const [existingApt]: any = await pool.query(
+        `SELECT id FROM online_appointments WHERE phone LIKE ? AND LOWER(payment_status) IN ('paid', 'free') LIMIT 1`,
+        [`%${cleanPatientPhone}%`]
+      );
+      if (existingReg.length > 0 || existingApt.length > 0) {
+        return res.status(400).json({
+          error: 'This promo code is exclusively valid for new / first-time patients.'
+        });
+      }
+    }
+
+    // Rule: Max Uses per Mobile Number
+    if (p.max_uses_per_phone && p.max_uses_per_phone > 0) {
+      if (!cleanPatientPhone || cleanPatientPhone.length !== 10) {
+        return res.status(400).json({
+          error: 'Please enter a valid 10-digit mobile number first to apply this promo code.'
+        });
+      }
+      const [phoneUsage]: any = await pool.query(
+        `SELECT COUNT(*) as count FROM online_appointments 
+         WHERE phone LIKE ? AND UPPER(promo_code) = UPPER(?) AND LOWER(payment_status) IN ('paid', 'free')`,
+        [`%${cleanPatientPhone}%`, p.code]
+      );
+      const count = phoneUsage[0]?.count || 0;
+      if (count >= p.max_uses_per_phone) {
+        return res.status(400).json({
+          error: p.max_uses_per_phone === 1
+            ? 'This promo code can only be used once per mobile number.'
+            : `This promo code has already been used ${count} time(s) for this mobile number (Limit: ${p.max_uses_per_phone}).`
+        });
+      }
+    }
+
     let discountPaise = 0;
     if (p.discount_type === 'percent') {
       discountPaise = Math.round((currentFeePaise * p.discount_value) / 100);

@@ -238,6 +238,10 @@ export const promoCodes = mysqlTable("promo_codes", {
   isLimited: boolean("is_limited").default(false),
   maxUses: int("max_uses"),
   usedCount: int("used_count").default(0),
+  maxUsesPerPhone: int("max_uses_per_phone"),
+  newPatientsOnly: boolean("new_patients_only").default(false),
+  expiresAt: timestamp("expires_at"),
+  minOrderAmount: int("min_order_amount"),
   isActive: boolean("is_active").default(true),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });

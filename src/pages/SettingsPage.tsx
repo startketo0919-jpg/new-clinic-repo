@@ -29,6 +29,20 @@ export default function SettingsPage() {
     }
   };
 
+  const formatPromoDateTime = (d: any) => {
+    if (!d) return '—';
+    try {
+      const s = typeof d === 'string' ? d.replace(' ', 'T') : d;
+      const date = new Date(s);
+      if (isNaN(date.getTime())) return String(d);
+      return date.toLocaleString('en-IN', {
+        day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
+      });
+    } catch {
+      return String(d);
+    }
+  };
+
   // Razorpay
   const [showRazorpayUnlocked, setShowRazorpayUnlocked] = useState(false);
   const [razorpayConfirmInput, setRazorpayConfirmInput] = useState('');
@@ -129,6 +143,10 @@ export default function SettingsPage() {
   const [newPromoValue, setNewPromoValue] = useState('');
   const [newPromoIsLimited, setNewPromoIsLimited] = useState(false);
   const [newPromoMaxUses, setNewPromoMaxUses] = useState('');
+  const [newPromoMaxUsesPerPhone, setNewPromoMaxUsesPerPhone] = useState('');
+  const [newPromoNewPatientsOnly, setNewPromoNewPatientsOnly] = useState(false);
+  const [newPromoExpiresAt, setNewPromoExpiresAt] = useState('');
+  const [newPromoMinAmount, setNewPromoMinAmount] = useState('');
   const [newPromoIsActive, setNewPromoIsActive] = useState(true);
   const [creatingPromo, setCreatingPromo] = useState(false);
   const [promoError, setPromoError] = useState('');
@@ -178,6 +196,10 @@ export default function SettingsPage() {
           discountValue: val,
           isLimited: newPromoIsLimited,
           maxUses: newPromoIsLimited && newPromoMaxUses ? parseInt(newPromoMaxUses, 10) : null,
+          maxUsesPerPhone: newPromoMaxUsesPerPhone ? parseInt(newPromoMaxUsesPerPhone, 10) : null,
+          newPatientsOnly: newPromoNewPatientsOnly,
+          expiresAt: newPromoExpiresAt || null,
+          minOrderAmount: newPromoMinAmount ? parseFloat(newPromoMinAmount) : null,
           isActive: newPromoIsActive
         })
       });
@@ -189,6 +211,10 @@ export default function SettingsPage() {
         setNewPromoValue('');
         setNewPromoIsLimited(false);
         setNewPromoMaxUses('');
+        setNewPromoMaxUsesPerPhone('');
+        setNewPromoNewPatientsOnly(false);
+        setNewPromoExpiresAt('');
+        setNewPromoMinAmount('');
         fetchPromoCodes();
       } else {
         setPromoError(data.error || 'Failed to create promo code');
@@ -1110,7 +1136,83 @@ export default function SettingsPage() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-slate-200">
+                {/* Promo Code Rules & Restrictions */}
+                <div className="pt-3 border-t border-slate-200">
+                  <h5 className="text-xs font-bold text-slate-800 uppercase tracking-wider mb-2.5">
+                    Usage Rules & Restrictions (Optional)
+                  </h5>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Limit per Mobile Number
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        value={newPromoMaxUsesPerPhone}
+                        onChange={e => setNewPromoMaxUsesPerPhone(e.target.value)}
+                        placeholder="e.g. 1 (Once per number), 2, 3..."
+                        className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                      />
+                      <p className="text-[11px] text-slate-400 mt-1">
+                        Leave blank for unlimited uses per phone. Enter 1 to allow once per patient phone.
+                      </p>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Expiry Date & Time
+                      </label>
+                      <input
+                        type="datetime-local"
+                        value={newPromoExpiresAt}
+                        onChange={e => setNewPromoExpiresAt(e.target.value)}
+                        className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                      />
+                      <p className="text-[11px] text-slate-400 mt-1">
+                        Leave empty if promo code should never expire.
+                      </p>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Minimum Consultation Fee (₹)
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="any"
+                        value={newPromoMinAmount}
+                        onChange={e => setNewPromoMinAmount(e.target.value)}
+                        placeholder="e.g. 199 (Optional)"
+                        className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                      />
+                      <p className="text-[11px] text-slate-400 mt-1">
+                        Only applies if fee before discount is at least this amount.
+                      </p>
+                    </div>
+
+                    <div className="space-y-2 pt-2 sm:pt-4">
+                      <label className="flex items-center gap-2 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={newPromoNewPatientsOnly}
+                          onChange={e => setNewPromoNewPatientsOnly(e.target.checked)}
+                          className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500"
+                        />
+                        <span className="text-xs font-bold text-slate-800">
+                          New Patients Only (1st-time consultations)
+                        </span>
+                      </label>
+                      <p className="text-[11px] text-slate-500 ml-6">
+                        Blocks patients who already have registered records or previous appointments.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-3 border-t border-slate-200">
                   <div className="space-y-2">
                     <label className="flex items-center gap-2 cursor-pointer select-none">
                       <input
@@ -1119,7 +1221,7 @@ export default function SettingsPage() {
                         onChange={e => setNewPromoIsLimited(e.target.checked)}
                         className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500"
                       />
-                      <span className="text-xs font-semibold text-slate-700">Limit total number of uses (Optional)</span>
+                      <span className="text-xs font-semibold text-slate-700">Limit total global uses across all patients</span>
                     </label>
 
                     {newPromoIsLimited && (
@@ -1128,7 +1230,7 @@ export default function SettingsPage() {
                         min="1"
                         value={newPromoMaxUses}
                         onChange={e => setNewPromoMaxUses(e.target.value)}
-                        placeholder="Maximum number of uses (e.g. 100)"
+                        placeholder="Maximum total uses (e.g. 100)"
                         className="w-full px-3.5 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
                         required={newPromoIsLimited}
                       />
@@ -1188,9 +1290,32 @@ export default function SettingsPage() {
                             </span>
                           </div>
 
+                          <div className="flex items-center gap-2 flex-wrap mt-2">
+                            {p.maxUsesPerPhone && (
+                              <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
+                                {p.maxUsesPerPhone === 1 ? '1x per mobile number' : `Max ${p.maxUsesPerPhone}x / phone`}
+                              </span>
+                            )}
+                            {p.newPatientsOnly && (
+                              <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 border border-purple-200">
+                                New Patients Only
+                              </span>
+                            )}
+                            {p.expiresAt && (
+                              <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+                                Expires: {formatPromoDateTime(p.expiresAt)}
+                              </span>
+                            )}
+                            {p.minOrderAmount && (
+                              <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200">
+                                Min Fee: ₹{p.minOrderAmount}
+                              </span>
+                            )}
+                          </div>
+
                           <div className="flex items-center gap-4 mt-2 text-xs text-slate-500">
                             <span>
-                              Uses: <strong>{p.usedCount || 0}</strong> {p.isLimited ? `/ ${p.maxUses} max` : '(Unlimited)'}
+                              Total Uses: <strong>{p.usedCount || 0}</strong> {p.isLimited ? `/ ${p.maxUses} max` : '(Unlimited)'}
                             </span>
                             <span>•</span>
                             <span>Created {formatPromoDate(p.createdAt)}</span>

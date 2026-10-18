@@ -1726,7 +1726,7 @@ Krishna Homoeopathic Clinic`;
                 ) : (
                   <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden bg-white">
                     {customLinks.map((l) => {
-                      const linkUrl = `https://app.drsunilkumarbhms.in/book?customToken=${l.token}`;
+                      const linkUrl = `https://app.drsunilkumarbhms.in/book-appointment?customToken=${l.token}`;
                       return (
                         <div key={l.id} className="divide-y divide-slate-100">
                           <div className="p-3 sm:p-4 flex items-center justify-between gap-3 text-sm">

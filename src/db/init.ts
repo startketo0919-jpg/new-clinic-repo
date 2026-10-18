@@ -227,6 +227,10 @@ export async function initDb() {
       is_limited BOOLEAN DEFAULT FALSE,
       max_uses INT NULL,
       used_count INT DEFAULT 0,
+      max_uses_per_phone INT NULL,
+      new_patients_only BOOLEAN DEFAULT FALSE,
+      expires_at TIMESTAMP NULL,
+      min_order_amount INT NULL,
       is_active BOOLEAN DEFAULT TRUE,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`
@@ -253,7 +257,11 @@ export async function initDb() {
     `ALTER TABLE online_appointments ADD COLUMN IF NOT EXISTS discount_amount INT DEFAULT 0;`,
     `ALTER TABLE online_appointments ADD COLUMN IF NOT EXISTS custom_link_token VARCHAR(64);`,
     `ALTER TABLE patient_registry ADD COLUMN IF NOT EXISTS last_paid_visit TIMESTAMP NULL;`,
-    `ALTER TABLE patient_registry ADD COLUMN IF NOT EXISTS last_paid_amount INT DEFAULT NULL;`
+    `ALTER TABLE patient_registry ADD COLUMN IF NOT EXISTS last_paid_amount INT DEFAULT NULL;`,
+    `ALTER TABLE promo_codes ADD COLUMN IF NOT EXISTS max_uses_per_phone INT DEFAULT NULL;`,
+    `ALTER TABLE promo_codes ADD COLUMN IF NOT EXISTS new_patients_only BOOLEAN DEFAULT FALSE;`,
+    `ALTER TABLE promo_codes ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP NULL;`,
+    `ALTER TABLE promo_codes ADD COLUMN IF NOT EXISTS min_order_amount INT DEFAULT NULL;`
   ];
 
   for (const alterQ of alterSettingsQueries) {

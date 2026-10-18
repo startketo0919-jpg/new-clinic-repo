@@ -87,9 +87,10 @@ export default function App() {
             <Route path="/track" element={<PatientTracker />} />
             <Route path="/shipment" element={<PatientShipmentForm />} />
             <Route path="/shipment-form" element={<PatientShipmentForm />} />
-            <Route path="/courier-form" element={<PatientShipmentForm />} />
             <Route path="/book-appointment" element={<BookAppointment />} />
+            <Route path="/book" element={<BookAppointment />} />
             <Route path="/reschedule" element={<RescheduleAppointment />} />
+            <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
         </BrowserRouter>
       </ClinicProvider>

@@ -167,6 +167,10 @@ export interface PromoCode {
   isLimited: boolean;
   maxUses?: number;
   usedCount: number;
+  maxUsesPerPhone?: number;
+  newPatientsOnly?: boolean;
+  expiresAt?: string;
+  minOrderAmount?: number;
   isActive: boolean;
   createdAt: string;
 }

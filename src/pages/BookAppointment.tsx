@@ -242,7 +242,12 @@ export default function BookAppointment() {
       const res = await fetch('/api/appointments/validate-promo', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: promoInput.trim(), currentFee: baseFee })
+        body: JSON.stringify({ 
+          code: promoInput.trim(), 
+          currentFee: baseFee,
+          phone: formData.phone,
+          patientName: formData.patientName 
+        })
       });
       const data = await res.json();
       if (!res.ok || !data.valid) {
