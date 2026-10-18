@@ -261,7 +261,8 @@ export async function initDb() {
     `ALTER TABLE promo_codes ADD COLUMN IF NOT EXISTS max_uses_per_phone INT DEFAULT NULL;`,
     `ALTER TABLE promo_codes ADD COLUMN IF NOT EXISTS new_patients_only BOOLEAN DEFAULT FALSE;`,
     `ALTER TABLE promo_codes ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP NULL;`,
-    `ALTER TABLE promo_codes ADD COLUMN IF NOT EXISTS min_order_amount INT DEFAULT NULL;`
+    `ALTER TABLE promo_codes ADD COLUMN IF NOT EXISTS min_order_amount INT DEFAULT NULL;`,
+    `ALTER TABLE settings ADD COLUMN IF NOT EXISTS default_google_meet_link TEXT;`
   ];
 
   for (const alterQ of alterSettingsQueries) {
@@ -312,6 +313,13 @@ export async function initDb() {
       UPDATE custom_booking_links
       SET expires_at = DATE_ADD(created_at, INTERVAL 2 DAY)
       WHERE expires_at IS NULL;
+    `);
+
+    // Clean up any historical meet.jit.si links from online_appointments
+    await pool.query(`
+      UPDATE online_appointments
+      SET meet_link = 'https://meet.google.com/new'
+      WHERE meet_link LIKE '%meet.jit.si%';
     `);
   } catch (err) {
     // Non-fatal backfill

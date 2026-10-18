@@ -107,12 +107,15 @@ export async function createMeetEvent(params: MeetEventParams): Promise<{ meetLi
             conferenceDataVersion: 1
         });
 
+        const videoUri = response.data.conferenceData?.entryPoints?.find((ep: any) => ep.entryPointType === 'video')?.uri;
+        const meetLink = response.data.hangoutLink || videoUri || '';
+
         return {
-            meetLink: response.data.hangoutLink || '',
+            meetLink,
             eventId: response.data.id || ''
         };
-    } catch (error) {
-        console.error('[GoogleMeet] Error in createMeetEvent:', error);
+    } catch (error: any) {
+        console.error('[GoogleMeet] Error in createMeetEvent:', error?.response?.data || error?.message || error);
         throw error;
     }
 }
@@ -179,12 +182,15 @@ export async function updateMeetEvent(params: MeetEventParams & { eventId: strin
             conferenceDataVersion: 1
         });
 
+        const videoUri = response.data.conferenceData?.entryPoints?.find((ep: any) => ep.entryPointType === 'video')?.uri;
+        const meetLink = response.data.hangoutLink || videoUri || '';
+
         return {
-            meetLink: response.data.hangoutLink || '',
+            meetLink,
             eventId: response.data.id || ''
         };
-    } catch (error) {
-        console.error('[GoogleMeet] Error in updateMeetEvent:', error);
+    } catch (error: any) {
+        console.error('[GoogleMeet] Error in updateMeetEvent:', error?.response?.data || error?.message || error);
         throw error;
     }
 }

@@ -88,6 +88,7 @@ export const settings = mysqlTable("settings", {
   followUpFreeDays: int("follow_up_free_days").default(7),
   followUpFee: int("follow_up_fee").default(0),
   sameConcernFee: int("same_concern_fee").default(19900),
+  defaultGoogleMeetLink: text("default_google_meet_link"),
 });
 
 export const whatsappMessages = mysqlTable("whatsapp_messages", {

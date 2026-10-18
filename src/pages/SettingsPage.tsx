@@ -1003,6 +1003,23 @@ export default function SettingsPage() {
                     </div>
                   </div>
                 </div>
+
+                <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
+                  <h4 className="font-semibold text-slate-700 mb-1">Permanent / Fallback Google Meet Link</h4>
+                  <p className="text-xs text-slate-500 mb-3">
+                    If dynamic Google Calendar creation is unavailable or the account is disconnected, appointments will use this Google Meet room link. You can paste your clinic's permanent Google Meet link (e.g. <code>https://meet.google.com/xyz-abcd-efg</code>).
+                  </p>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Default Google Meet Link</label>
+                    <input 
+                      type="url" 
+                      value={state.settings.defaultGoogleMeetLink || ''} 
+                      onChange={e => updateSettings({ defaultGoogleMeetLink: e.target.value })} 
+                      className="w-full px-4 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 font-mono" 
+                      placeholder="https://meet.google.com/xxx-yyyy-zzz"
+                    />
+                  </div>
+                </div>
               </div>
             </div>
           )}

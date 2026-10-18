@@ -3087,6 +3087,9 @@ app.post('/api/appointments/book-slot', async (req, res) => {
     let meetLink = '';
     let googleEventId = '';
     const s = await getAppointmentSettings();
+    const fallbackMeet = (s.default_google_meet_link && s.default_google_meet_link.trim()) 
+      ? s.default_google_meet_link.trim() 
+      : 'https://meet.google.com/new';
     
     if (s.google_oauth_refresh_token) {
       try {
@@ -3110,14 +3113,14 @@ app.post('/api/appointments/book-slot', async (req, res) => {
           date, timeSlot, slotEnd,
           healthConcern: apt.health_concern
         });
-        meetLink = meetResult.meetLink;
+        meetLink = meetResult.meetLink || fallbackMeet;
         googleEventId = meetResult.eventId;
       } catch (meetErr) {
         console.error('[BookSlot] Google Meet creation failed, using fallback:', meetErr);
-        meetLink = `https://meet.jit.si/krishna-clinic-${appointmentId}`;
+        meetLink = fallbackMeet;
       }
     } else {
-      meetLink = `https://meet.jit.si/krishna-clinic-${appointmentId}`;
+      meetLink = fallbackMeet;
     }
     
     // Auto-generate PID for new patients / different family members
@@ -3536,6 +3539,13 @@ app.post('/api/appointments/reschedule/confirm', async (req, res) => {
       } catch (meetErr) {
         console.error('[Reschedule] Google Meet update failed:', meetErr);
       }
+    }
+    
+    // Ensure meetLink is never empty or legacy jitsi
+    if (!meetLink || meetLink.includes('meet.jit.si')) {
+      meetLink = (s.default_google_meet_link && s.default_google_meet_link.trim())
+        ? s.default_google_meet_link.trim()
+        : 'https://meet.google.com/new';
     }
     
     // Update appointment

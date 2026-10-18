@@ -107,6 +107,7 @@ export interface ClinicState {
     followUpFreeDays?: number;
     followUpFee?: number;
     sameConcernFee?: number;
+    defaultGoogleMeetLink?: string;
   };
   templates: WhatsAppTemplate[];
 }
