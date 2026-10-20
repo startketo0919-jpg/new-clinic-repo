@@ -15,6 +15,7 @@ import PatientShipmentForm from './pages/PatientShipmentForm';
 import SetupPage from './pages/SetupPage';
 import BookAppointment from './pages/BookAppointment';
 import RescheduleAppointment from './pages/RescheduleAppointment';
+import TrackCourier from './pages/TrackCourier';
 
 interface ErrorBoundaryProps {
   children: React.ReactNode;
@@ -90,6 +91,9 @@ export default function App() {
             <Route path="/book-appointment" element={<BookAppointment />} />
             <Route path="/book" element={<BookAppointment />} />
             <Route path="/reschedule" element={<RescheduleAppointment />} />
+            <Route path="/track-courier" element={<TrackCourier />} />
+            <Route path="/track-order" element={<TrackCourier />} />
+            <Route path="/courier-tracking" element={<TrackCourier />} />
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
         </BrowserRouter>

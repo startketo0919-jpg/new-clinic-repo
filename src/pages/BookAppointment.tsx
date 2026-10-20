@@ -1815,6 +1815,22 @@ END:VCALENDAR`;
                       </a>
                     </div>
                   </div>
+
+                  {formData.needsCourier && (
+                    <div className="mt-3 bg-amber-50 rounded-xl p-3 text-xs text-amber-900 border border-amber-200 flex items-center justify-between gap-2">
+                      <div>
+                        <strong>Medicine Courier:</strong> Requested for dispatch to your delivery address.
+                      </div>
+                      <a 
+                        href={`/track-courier?phone=${formData.phone}`} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="text-amber-800 font-bold hover:underline shrink-0"
+                      >
+                        Track Courier →
+                      </a>
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex flex-col sm:flex-row gap-4 justify-center">

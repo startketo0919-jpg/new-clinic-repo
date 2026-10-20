@@ -1416,6 +1416,198 @@ await db.update(delhiveryOrders).set({ status: 'Cancelled' }).where(eq(delhivery
     }
   });
 
+  // Public Courier Tracking API for Patients (Outside Admin Panel)
+  app.get('/api/courier/track', async (req, res) => {
+    try {
+      const rawQuery = String(
+        req.query.q || req.query.query || req.query.awb || req.query.orderId || req.query.phone || req.query.waybill || ''
+      ).trim();
+
+      if (!rawQuery) {
+        return res.status(400).json({ error: 'Please enter an AWB number, Order ID, or 10-digit Mobile number to track.' });
+      }
+
+      // IP rate limit: 35 requests per 10 minutes
+      const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() || req.socket.remoteAddress || 'unknown';
+      const now = Date.now();
+      const trackerKey = 'courier_track_' + clientIp;
+      if (!ipSubmissionTracker.has(trackerKey)) ipSubmissionTracker.set(trackerKey, []);
+      const timestamps = ipSubmissionTracker.get(trackerKey)!.filter((t: number) => now - t < 600000);
+      if (timestamps.length >= 35) {
+        return res.status(429).json({ error: 'Too many tracking requests from this connection. Please wait a few minutes before trying again.' });
+      }
+      timestamps.push(now);
+      ipSubmissionTracker.set(trackerKey, timestamps);
+
+      const dbSettings = await db.select().from(settings).where(eq(settings.id, "default")).limit(1);
+      const s = dbSettings[0];
+      const delhiveryKey = s?.delhiveryApiKey ? s.delhiveryApiKey.trim() : '';
+
+      // Check if input is a phone number
+      const digitsOnly = rawQuery.replace(/\D/g, '');
+      const isPhoneNumber =
+        (digitsOnly.length === 10 && /^[6-9]\d{9}$/.test(digitsOnly)) ||
+        (digitsOnly.length === 12 && digitsOnly.startsWith('91') && /^[6-9]\d{9}$/.test(digitsOnly.slice(2))) ||
+        (digitsOnly.length === 11 && digitsOnly.startsWith('0') && /^[6-9]\d{9}$/.test(digitsOnly.slice(1)));
+
+      let cleanPhone = '';
+      if (isPhoneNumber) {
+        if (digitsOnly.length === 10) cleanPhone = digitsOnly;
+        else if (digitsOnly.length === 12 && digitsOnly.startsWith('91')) cleanPhone = digitsOnly.slice(2);
+        else if (digitsOnly.length === 11 && digitsOnly.startsWith('0')) cleanPhone = digitsOnly.slice(1);
+      }
+
+      // If Phone Number: Find all recent courier packages dispatched to this patient
+      if (cleanPhone) {
+        const [orderRows]: any = await pool.query(
+          `SELECT id, order_id, awb, consignee_name, consignee_phone, consignee_pincode, items, status, timestamp 
+           FROM delhivery_orders 
+           WHERE consignee_phone LIKE ? OR consignee_phone LIKE ? 
+           ORDER BY timestamp DESC LIMIT 10`,
+          [`%${cleanPhone}`, `%${digitsOnly}`]
+        );
+
+        const [shipmentRows]: any = await pool.query(
+          `SELECT id, patient_name, phone, pincode, notes, status, created_at, completed_at 
+           FROM patient_shipments 
+           WHERE phone LIKE ? OR phone LIKE ? 
+           ORDER BY created_at DESC LIMIT 10`,
+          [`%${cleanPhone}`, `%${digitsOnly}`]
+        );
+
+        const foundPackages: any[] = [];
+
+        for (const ord of orderRows) {
+          foundPackages.push({
+            id: ord.id,
+            orderId: ord.order_id,
+            awb: ord.awb,
+            consigneeName: ord.consignee_name,
+            pincode: ord.consignee_pincode,
+            items: ord.items || 'Homoeopathic Medicines',
+            status: ord.status || 'Manifested',
+            timestamp: ord.timestamp
+          });
+        }
+
+        for (const shp of shipmentRows) {
+          if (!foundPackages.some(p => p.id === shp.id || p.orderId === shp.id)) {
+            foundPackages.push({
+              id: shp.id,
+              orderId: shp.id,
+              awb: null,
+              consigneeName: shp.patient_name,
+              pincode: shp.pincode,
+              items: shp.notes || 'Homoeopathic Medicines',
+              status: shp.status || 'Processing',
+              timestamp: shp.created_at
+            });
+          }
+        }
+
+        if (foundPackages.length === 0) {
+          return res.json({
+            success: false,
+            type: 'phone',
+            phone: cleanPhone,
+            message: `No medicine courier orders found for mobile number ending in ${cleanPhone.slice(-4)}. If you recently ordered, please allow a little time for dispatch.`
+          });
+        }
+
+        // If only 1 package and it has an AWB, also fetch its live Delhivery tracking
+        let liveTracking = null;
+        if (foundPackages.length === 1 && foundPackages[0].awb && delhiveryKey) {
+          try {
+            const trackUrl = `https://track.delhivery.com/api/v1/packages/json/?waybill=${encodeURIComponent(foundPackages[0].awb)}`;
+            const dRes = await fetch(trackUrl, {
+              headers: { 'Authorization': `Token ${delhiveryKey}`, 'Content-Type': 'application/json' }
+            });
+            const dData = await dRes.json();
+            if (dData?.ShipmentData?.[0]?.Shipment) {
+              liveTracking = dData.ShipmentData[0].Shipment;
+            }
+          } catch (err: any) {
+            console.warn('[CourierTrack] Auto live track error for single package:', err.message);
+          }
+        }
+
+        return res.json({
+          success: true,
+          type: 'phone',
+          phone: cleanPhone,
+          packages: foundPackages,
+          liveTracking
+        });
+      }
+
+      // Query by AWB or Order ID
+      let targetAwb = rawQuery;
+      let localOrder: any = null;
+
+      const [matchedOrders]: any = await pool.query(
+        `SELECT id, order_id, awb, consignee_name, consignee_phone, consignee_address, consignee_pincode, items, status, timestamp 
+         FROM delhivery_orders 
+         WHERE awb = ? OR order_id = ? OR id = ? LIMIT 1`,
+        [rawQuery, rawQuery, rawQuery]
+      );
+
+      if (matchedOrders.length > 0) {
+        localOrder = matchedOrders[0];
+        if (localOrder.awb) {
+          targetAwb = localOrder.awb;
+        }
+      }
+
+      // Fetch live tracking from Delhivery Packages API
+      let liveShipment: any = null;
+      let liveError: string | null = null;
+
+      if (delhiveryKey) {
+        try {
+          const trackUrl = `https://track.delhivery.com/api/v1/packages/json/?waybill=${encodeURIComponent(targetAwb)}`;
+          const dRes = await fetch(trackUrl, {
+            headers: { 'Authorization': `Token ${delhiveryKey}`, 'Content-Type': 'application/json' }
+          });
+          const dData = await dRes.json();
+          if (dData?.ShipmentData?.[0]?.Shipment) {
+            liveShipment = dData.ShipmentData[0].Shipment;
+          } else if (dData?.Error) {
+            liveError = dData.Error;
+          }
+        } catch (err: any) {
+          console.warn('[CourierTrack] Delhivery API error:', err.message);
+          liveError = err.message;
+        }
+      }
+
+      if (!localOrder && !liveShipment) {
+        return res.status(404).json({
+          success: false,
+          message: `No courier order found for "${rawQuery}". Please check the AWB number, Order ID, or enter your 10-digit mobile number.`
+        });
+      }
+
+      return res.json({
+        success: true,
+        type: 'awb',
+        awb: targetAwb,
+        order: localOrder ? {
+          orderId: localOrder.order_id,
+          awb: localOrder.awb,
+          consigneeName: localOrder.consignee_name,
+          pincode: localOrder.consignee_pincode,
+          items: localOrder.items,
+          status: localOrder.status,
+          timestamp: localOrder.timestamp
+        } : null,
+        liveTracking: liveShipment
+      });
+    } catch (e: any) {
+      console.error('[CourierTrack] Endpoint error:', e);
+      res.status(500).json({ error: 'Failed to retrieve tracking details. Please try again later.' });
+    }
+  });
+
 app.get('/api/delhivery/label-url/:awb', requireStaffAuth, async (req, res) => {
     try {
       const dbSettings = await db.select().from(settings).where(eq(settings.id, "default")).limit(1);

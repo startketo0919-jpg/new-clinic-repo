@@ -144,9 +144,22 @@ export default function PatientShipmentForm() {
               <span>Our clinic dispatch team will process your shipment shortly.</span>
             </div>
 
+            <div className="mt-4 p-3.5 bg-teal-50 border border-teal-200 rounded-2xl text-center">
+              <p className="text-xs text-teal-800">
+                Once dispatched, you can track your medicine package status anytime:
+              </p>
+              <a
+                href={`/track-courier?phone=${submittedData.phone}`}
+                className="inline-flex items-center gap-1.5 mt-2 px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold transition-colors shadow-2xs"
+              >
+                <Package className="w-4 h-4" />
+                <span>Track Medicine Courier Online</span>
+              </a>
+            </div>
+
             <button
               onClick={handleReset}
-              className="mt-6 w-full py-3 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-sm font-medium transition-colors shadow-md"
+              className="mt-4 w-full py-2.5 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition-colors"
             >
               Submit Another Response
             </button>

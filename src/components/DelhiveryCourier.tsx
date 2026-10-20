@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Package, Truck, FileText, Search, Plus, Trash2, CheckCircle2, Download, XCircle, Copy, AlertCircle, Clock, ChevronDown, ChevronUp, RefreshCw, MessageSquare, Phone, Send, Crop, Printer } from 'lucide-react';
+import { Package, Truck, FileText, Search, Plus, Trash2, CheckCircle2, Download, XCircle, Copy, AlertCircle, Clock, ChevronDown, ChevronUp, RefreshCw, MessageSquare, Phone, Send, Crop, Printer, ExternalLink } from 'lucide-react';
 import { useClinic } from '../context/ClinicContext';
 import LabelCropModal from './LabelCropModal';
 
@@ -1348,6 +1348,18 @@ export default function DelhiveryCourier({ prefillData }: DelhiveryCourierProps 
                                <Search className="w-3.5 h-3.5" />
                                <span>Track In-App</span>
                              </button>
+
+                             {/* Patient Public Tracking Link */}
+                             <a
+                               href={`/track-courier?awb=${order.awb}`}
+                               target="_blank"
+                               rel="noopener noreferrer"
+                               className="inline-flex items-center gap-1.5 text-slate-700 hover:text-teal-700 hover:bg-teal-50 font-semibold text-xs border border-slate-200 px-2.5 py-1.5 rounded-lg bg-white transition-all shadow-2xs"
+                               title="Open patient tracking page"
+                             >
+                               <ExternalLink className="w-3.5 h-3.5" />
+                               <span>Patient Link</span>
+                             </a>
 
                              {/* Print / Crop Label Button */}
                              <button 
