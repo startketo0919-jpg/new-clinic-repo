@@ -1460,7 +1460,7 @@ await db.update(delhiveryOrders).set({ status: 'Cancelled' }).where(eq(delhivery
       // If Phone Number: Find all recent courier packages dispatched to this patient
       if (cleanPhone) {
         const [orderRows]: any = await pool.query(
-          `SELECT id, order_id, awb, consignee_name, consignee_phone, consignee_pincode, items, status, timestamp 
+          `SELECT id, order_id, awb, consignee_name, consignee_phone, consignee_address, consignee_pincode, items, status, timestamp 
            FROM delhivery_orders 
            WHERE consignee_phone LIKE ? OR consignee_phone LIKE ? 
            ORDER BY timestamp DESC LIMIT 10`,
@@ -1468,7 +1468,7 @@ await db.update(delhiveryOrders).set({ status: 'Cancelled' }).where(eq(delhivery
         );
 
         const [shipmentRows]: any = await pool.query(
-          `SELECT id, patient_name, phone, pincode, notes, status, created_at, completed_at 
+          `SELECT id, patient_name, phone, address, pincode, notes, status, created_at, completed_at 
            FROM patient_shipments 
            WHERE phone LIKE ? OR phone LIKE ? 
            ORDER BY created_at DESC LIMIT 10`,
@@ -1478,13 +1478,28 @@ await db.update(delhiveryOrders).set({ status: 'Cancelled' }).where(eq(delhivery
         const foundPackages: any[] = [];
 
         for (const ord of orderRows) {
+          let cleanItems = 'Homoeopathic Medicines';
+          if (ord.items) {
+            try {
+              const parsed = JSON.parse(ord.items);
+              if (Array.isArray(parsed)) {
+                cleanItems = parsed.map((it: any) => it.name || it).filter(Boolean).join(', ') || 'Homoeopathic Medicines';
+              } else {
+                cleanItems = String(ord.items);
+              }
+            } catch (e) {
+              cleanItems = String(ord.items);
+            }
+          }
+
           foundPackages.push({
             id: ord.id,
             orderId: ord.order_id,
             awb: ord.awb,
             consigneeName: ord.consignee_name,
+            address: ord.consignee_address,
             pincode: ord.consignee_pincode,
-            items: ord.items || 'Homoeopathic Medicines',
+            items: cleanItems,
             status: ord.status || 'Manifested',
             timestamp: ord.timestamp
           });
@@ -1497,6 +1512,7 @@ await db.update(delhiveryOrders).set({ status: 'Cancelled' }).where(eq(delhivery
               orderId: shp.id,
               awb: null,
               consigneeName: shp.patient_name,
+              address: shp.address,
               pincode: shp.pincode,
               items: shp.notes || 'Homoeopathic Medicines',
               status: shp.status || 'Processing',
@@ -1514,11 +1530,22 @@ await db.update(delhiveryOrders).set({ status: 'Cancelled' }).where(eq(delhivery
           });
         }
 
-        // If only 1 package and it has an AWB, also fetch its live Delhivery tracking
+        // Auto-select the first package with an AWB (or first package in list)
+        const activePkg = foundPackages.find(p => p.awb) || foundPackages[0];
         let liveTracking = null;
-        if (foundPackages.length === 1 && foundPackages[0].awb && delhiveryKey) {
+        let selectedOrder = activePkg ? {
+          orderId: activePkg.orderId,
+          awb: activePkg.awb,
+          consigneeName: activePkg.consigneeName,
+          pincode: activePkg.pincode,
+          address: activePkg.address,
+          status: activePkg.status,
+          timestamp: activePkg.timestamp
+        } : null;
+
+        if (activePkg?.awb && delhiveryKey) {
           try {
-            const trackUrl = `https://track.delhivery.com/api/v1/packages/json/?waybill=${encodeURIComponent(foundPackages[0].awb)}`;
+            const trackUrl = `https://track.delhivery.com/api/v1/packages/json/?waybill=${encodeURIComponent(activePkg.awb)}`;
             const dRes = await fetch(trackUrl, {
               headers: { 'Authorization': `Token ${delhiveryKey}`, 'Content-Type': 'application/json' }
             });
@@ -1527,7 +1554,7 @@ await db.update(delhiveryOrders).set({ status: 'Cancelled' }).where(eq(delhivery
               liveTracking = dData.ShipmentData[0].Shipment;
             }
           } catch (err: any) {
-            console.warn('[CourierTrack] Auto live track error for single package:', err.message);
+            console.warn('[CourierTrack] Auto live track error for package:', err.message);
           }
         }
 
@@ -1536,6 +1563,8 @@ await db.update(delhiveryOrders).set({ status: 'Cancelled' }).where(eq(delhivery
           type: 'phone',
           phone: cleanPhone,
           packages: foundPackages,
+          selectedAwb: activePkg?.awb || null,
+          order: selectedOrder,
           liveTracking
         });
       }

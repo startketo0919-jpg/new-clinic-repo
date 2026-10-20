@@ -18,7 +18,8 @@ import {
   Sparkles,
   Stethoscope,
   ShieldCheck,
-  ChevronRight
+  ChevronRight,
+  MessageSquare
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -30,7 +31,6 @@ interface ScanEvent {
     Instructions?: string;
     StatusCode?: string;
   };
-  // Fallbacks if flattened
   scan?: string;
   scanDateTime?: string;
   location?: string;
@@ -67,6 +67,7 @@ interface LocalOrder {
   awb?: string;
   consigneeName?: string;
   pincode?: string;
+  address?: string;
   items?: string;
   status?: string;
   timestamp?: string;
@@ -78,6 +79,7 @@ interface PackageItem {
   awb: string | null;
   consigneeName: string;
   pincode: string;
+  address?: string;
   items: string;
   status: string;
   timestamp: string;
@@ -103,7 +105,6 @@ export default function TrackCourier() {
     const paramVal = params.get('awb') || params.get('waybill') || params.get('order') || params.get('orderId') || params.get('phone') || params.get('q');
     if (paramVal && paramVal.trim()) {
       setSearchQuery(paramVal.trim());
-      // Check if it's a 10-digit phone number
       const cleanDigits = paramVal.replace(/\D/g, '');
       if (cleanDigits.length === 10 && /^[6-9]\d{9}$/.test(cleanDigits)) {
         setSearchMode('phone');
@@ -151,11 +152,16 @@ export default function TrackCourier() {
 
       if (data.type === 'phone') {
         setPhonePackages(data.packages || []);
+        if (data.selectedAwb) {
+          setSelectedAwb(data.selectedAwb);
+        } else if (data.packages?.[0]?.awb) {
+          setSelectedAwb(data.packages[0].awb);
+        }
+        if (data.order) {
+          setLocalOrder(data.order);
+        }
         if (data.liveTracking) {
           setLiveShipment(data.liveTracking);
-          if (data.packages?.[0]?.awb) {
-            setSelectedAwb(data.packages[0].awb);
-          }
         }
       } else {
         setSelectedAwb(data.awb);
@@ -174,22 +180,35 @@ export default function TrackCourier() {
     performTrack(searchQuery);
   };
 
-  const trackSpecificAwb = (awbToTrack: string, pkgInfo?: PackageItem) => {
-    setSelectedAwb(awbToTrack);
-    setSearchQuery(awbToTrack);
-    setSearchMode('awb');
-    if (pkgInfo) {
-      setLocalOrder({
-        orderId: pkgInfo.orderId,
-        awb: pkgInfo.awb || undefined,
-        consigneeName: pkgInfo.consigneeName,
-        pincode: pkgInfo.pincode,
-        items: pkgInfo.items,
-        status: pkgInfo.status,
-        timestamp: pkgInfo.timestamp
-      });
+  // Select package from phone packages list without clearing list
+  const selectPackage = async (pkg: PackageItem) => {
+    setSelectedAwb(pkg.awb);
+    setLocalOrder({
+      orderId: pkg.orderId,
+      awb: pkg.awb || undefined,
+      consigneeName: pkg.consigneeName,
+      pincode: pkg.pincode,
+      address: pkg.address,
+      status: pkg.status,
+      timestamp: pkg.timestamp
+    });
+    setLiveShipment(null);
+
+    if (pkg.awb) {
+      setLoading(true);
+      try {
+        const res = await fetch(`/api/courier/track?awb=${encodeURIComponent(pkg.awb)}`);
+        const data = await res.json();
+        if (data.success) {
+          if (data.liveTracking) setLiveShipment(data.liveTracking);
+          if (data.order) setLocalOrder(data.order);
+        }
+      } catch (err) {
+        console.warn('Failed to fetch package live tracking:', err);
+      } finally {
+        setLoading(false);
+      }
     }
-    performTrack(awbToTrack);
   };
 
   const handleCopyAwb = (awbNumber: string) => {
@@ -245,21 +264,34 @@ export default function TrackCourier() {
             </div>
           </a>
 
-          <div className="flex items-center gap-2 sm:gap-3">
+          <div className="flex items-center gap-2 sm:gap-2.5">
             <a 
               href="/book-appointment" 
-              className="hidden sm:inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg border border-teal-200 text-teal-700 bg-teal-50 hover:bg-teal-100 text-xs font-semibold transition-colors"
+              className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-teal-200 text-teal-700 bg-teal-50 hover:bg-teal-100 text-xs font-semibold transition-colors"
             >
               Book Consultation
             </a>
+            
+            {/* Call Reception: 05676350536 */}
             <a 
-              href="https://wa.me/919451151444?text=Hello%20Doctor%2C%20I%20have%20an%20inquiry%20regarding%20my%20medicine%20courier." 
+              href="tel:05676350536" 
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 text-slate-700 bg-white hover:bg-slate-50 text-xs font-semibold transition-colors shadow-2xs"
+              title="Call Clinic Reception"
+            >
+              <Phone className="w-3.5 h-3.5 text-teal-600" />
+              <span>Call (05676350536)</span>
+            </a>
+
+            {/* WhatsApp Helpline: +91 6396535078 */}
+            <a 
+              href="https://wa.me/916396535078?text=Hello%20Doctor%2C%20I%20have%20an%20inquiry%20regarding%20my%20medicine%20courier." 
               target="_blank" 
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold transition-colors shadow-2xs"
+              title="WhatsApp Helpline"
             >
-              <Phone className="w-3.5 h-3.5" />
-              <span>Helpline</span>
+              <MessageSquare className="w-3.5 h-3.5" />
+              <span>WhatsApp</span>
             </a>
           </div>
         </div>
@@ -371,12 +403,18 @@ export default function TrackCourier() {
                   Clear and Try Again
                 </button>
                 <a
-                  href="https://wa.me/919451151444?text=Hello%20Doctor%2C%20I%20am%20trying%20to%20track%20my%20medicine%20delivery%20and%20need%20assistance."
+                  href="tel:05676350536"
+                  className="px-3 py-1 bg-slate-800 text-white rounded-lg font-medium hover:bg-slate-900"
+                >
+                  Call Reception (05676350536)
+                </a>
+                <a
+                  href="https://wa.me/916396535078?text=Hello%20Doctor%2C%20I%20am%20trying%20to%20track%20my%20medicine%20delivery%20and%20need%20assistance."
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="px-3 py-1 bg-rose-600 text-white rounded-lg font-medium hover:bg-rose-700"
+                  className="px-3 py-1 bg-emerald-600 text-white rounded-lg font-medium hover:bg-emerald-700"
                 >
-                  Contact Clinic Support
+                  WhatsApp Support
                 </a>
               </div>
             </div>
@@ -399,54 +437,61 @@ export default function TrackCourier() {
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-              {phonePackages.map((pkg, idx) => (
-                <div
-                  key={pkg.id || idx}
-                  className={`border rounded-xl p-4 transition-all hover:shadow-md cursor-pointer ${
-                    selectedAwb === pkg.awb && pkg.awb
-                      ? 'border-teal-500 bg-teal-50/40 ring-1 ring-teal-500'
-                      : 'border-slate-200 bg-white hover:border-slate-300'
-                  }`}
-                  onClick={() => pkg.awb && trackSpecificAwb(pkg.awb, pkg)}
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <span className="text-xs font-bold text-slate-800">{pkg.consigneeName}</span>
-                      <div className="text-[11px] text-slate-500 mt-0.5">
-                        {pkg.items || 'Homoeopathic Medicines'}
-                      </div>
-                    </div>
-                    <span className="inline-flex px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-700">
-                      {pkg.status}
-                    </span>
-                  </div>
+              {phonePackages.map((pkg, idx) => {
+                const isSelected = (selectedAwb && pkg.awb && selectedAwb === pkg.awb) || 
+                                  (!selectedAwb && localOrder?.orderId === pkg.orderId);
 
-                  <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
-                    <div>
-                      {pkg.awb ? (
-                        <div className="font-mono text-teal-700 font-semibold text-[11px]">
-                          AWB: {pkg.awb}
-                        </div>
-                      ) : (
-                        <div className="text-amber-600 font-medium text-[11px]">
-                          Processing for Dispatch
-                        </div>
-                      )}
-                      <div className="text-[10px] text-slate-400">
-                        {pkg.timestamp ? new Date(pkg.timestamp).toLocaleDateString() : ''}
+                return (
+                  <div
+                    key={pkg.id || idx}
+                    className={`border rounded-xl p-4 transition-all hover:shadow-md cursor-pointer ${
+                      isSelected
+                        ? 'border-teal-500 bg-teal-50/40 ring-2 ring-teal-500/50'
+                        : 'border-slate-200 bg-white hover:border-slate-300'
+                    }`}
+                    onClick={() => selectPackage(pkg)}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <span className="text-xs font-bold text-slate-900 block">{pkg.consigneeName}</span>
+                        {pkg.pincode && (
+                          <span className="text-[11px] text-slate-500 block mt-0.5">
+                            PIN: {pkg.pincode}
+                          </span>
+                        )}
                       </div>
-                    </div>
-
-                    {pkg.awb ? (
-                      <span className="inline-flex items-center gap-1 text-teal-600 font-semibold text-xs hover:underline">
-                        Track <ChevronRight className="w-3.5 h-3.5" />
+                      <span className="inline-flex px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-700 shrink-0">
+                        {pkg.status}
                       </span>
-                    ) : (
-                      <span className="text-[11px] text-slate-400">Awaiting AWB</span>
-                    )}
+                    </div>
+
+                    <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
+                      <div>
+                        {pkg.awb ? (
+                          <div className="font-mono text-teal-700 font-semibold text-[11px]">
+                            AWB: {pkg.awb}
+                          </div>
+                        ) : (
+                          <div className="text-amber-600 font-medium text-[11px]">
+                            Processing for Dispatch
+                          </div>
+                        )}
+                        <div className="text-[10px] text-slate-400">
+                          {pkg.timestamp ? new Date(pkg.timestamp).toLocaleDateString() : ''}
+                        </div>
+                      </div>
+
+                      {pkg.awb ? (
+                        <span className="inline-flex items-center gap-1 text-teal-600 font-semibold text-xs hover:underline">
+                          Track <ChevronRight className="w-3.5 h-3.5" />
+                        </span>
+                      ) : (
+                        <span className="text-[11px] text-slate-400">Awaiting AWB</span>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
@@ -580,20 +625,20 @@ export default function TrackCourier() {
                 <div>
                   <span className="text-slate-400 block text-[10px] uppercase font-bold tracking-wider">Destination</span>
                   <span className="font-bold text-slate-800 block text-sm mt-0.5">
-                    {liveShipment?.Destination || localOrder?.pincode ? `Pin: ${liveShipment?.Consignee?.PinCode || localOrder?.pincode}` : 'India'}
+                    {liveShipment?.Consignee?.PinCode 
+                      ? `Pin: ${liveShipment.Consignee.PinCode}` 
+                      : (localOrder?.pincode ? `Pin: ${localOrder.pincode}` : (liveShipment?.Destination || 'India'))}
                   </span>
                   <span className="text-slate-500 text-[11px] truncate block">
-                    {liveShipment?.Consignee?.City || ''}
+                    {liveShipment?.Consignee?.City || liveShipment?.Destination || ''}
                   </span>
                 </div>
 
+                {/* Patient / Recipient: ONLY patient name shown */}
                 <div>
                   <span className="text-slate-400 block text-[10px] uppercase font-bold tracking-wider">Patient / Recipient</span>
                   <span className="font-bold text-slate-800 block text-sm mt-0.5 truncate">
-                    {liveShipment?.Consignee?.Name || localOrder?.consigneeName || 'Patient'}
-                  </span>
-                  <span className="text-slate-500 text-[11px] block">
-                    {localOrder?.items || 'Homoeopathic Medicines'}
+                    {localOrder?.consigneeName || liveShipment?.Consignee?.Name || 'Patient'}
                   </span>
                 </div>
 
@@ -691,22 +736,34 @@ export default function TrackCourier() {
                 </p>
               </div>
 
-              <div className="bg-slate-100/80 border border-slate-200 rounded-2xl p-5 text-xs text-slate-700 space-y-2">
+              <div className="bg-slate-100/80 border border-slate-200 rounded-2xl p-5 text-xs text-slate-700 space-y-3">
                 <div className="font-bold flex items-center gap-1.5 text-sm text-slate-900">
                   <Phone className="w-4 h-4 text-slate-700" />
                   Need Help With Your Delivery?
                 </div>
                 <p className="leading-relaxed text-slate-600">
-                  If your package is delayed or you have any queries about your medicine dosage, message our clinic team on WhatsApp:
+                  If you have any questions regarding your package dispatch, delivery ETA, or medicine dosage, reach out to our clinic reception:
                 </p>
-                <a
-                  href={`https://wa.me/919451151444?text=${encodeURIComponent(`Hello Doctor, I am tracking my medicine order (AWB: ${selectedAwb || 'N/A'}). I need assistance.`)}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1.5 font-bold text-teal-700 hover:text-teal-800 hover:underline pt-1"
-                >
-                  Message Clinic Reception on WhatsApp (+91 9451151444) →
-                </a>
+                
+                {/* Contact Buttons */}
+                <div className="flex flex-col sm:flex-row gap-2 pt-1">
+                  <a
+                    href="tel:05676350536"
+                    className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold text-xs transition-colors shadow-2xs"
+                  >
+                    <Phone className="w-3.5 h-3.5" />
+                    <span>Call Reception (05676350536)</span>
+                  </a>
+                  <a
+                    href={`https://wa.me/916396535078?text=${encodeURIComponent(`Hello Doctor, I am tracking my medicine order (AWB: ${selectedAwb || 'N/A'}). I need assistance.`)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs transition-colors shadow-2xs"
+                  >
+                    <MessageSquare className="w-3.5 h-3.5" />
+                    <span>WhatsApp (+91 6396535078)</span>
+                  </a>
+                </div>
               </div>
             </div>
 
@@ -719,7 +776,7 @@ export default function TrackCourier() {
       <footer className="mt-16 border-t border-slate-200 bg-white py-6 text-center text-xs text-slate-500">
         <p>© {new Date().getFullYear()} Krishna Homoeopathic Clinic. All rights reserved.</p>
         <p className="mt-1">
-          Dr. Sunil Kumar (BHMS) • Online Consultations & Pan-India Medicine Courier Delivery
+          Dr. Sunil Kumar (BHMS) • Helpline: 05676350536 • WhatsApp: +91 6396535078
         </p>
       </footer>
     </div>

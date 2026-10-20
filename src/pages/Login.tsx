@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Stethoscope, Monitor, Smartphone, UserRound, Lock, KeyRound, Mail, ArrowLeft, RefreshCw, CheckCircle2, Calendar } from 'lucide-react';
+import { Stethoscope, Monitor, Smartphone, UserRound, Lock, KeyRound, Mail, ArrowLeft, RefreshCw, CheckCircle2, Calendar, Truck } from 'lucide-react';
 import { useClinic } from '../context/ClinicContext';
 
 export default function Login() {
@@ -252,7 +252,24 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-gradient-to-b from-slate-50 to-slate-100 flex flex-col items-center justify-center p-4 sm:p-6 font-sans">
+      
+      {/* Clinic Header Branding */}
+      <div className="max-w-4xl w-full mb-8 text-center">
+        <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-teal-600 text-white shadow-md mb-3">
+          <Stethoscope className="w-8 h-8" />
+        </div>
+        <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
+          Krishna Homoeopathic Clinic
+        </h1>
+        <p className="text-teal-700 font-bold text-sm sm:text-base mt-1">
+          Dr. Sunil Kumar (BHMS)
+        </p>
+        <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
+          Online Consultations • In-Clinic Appointments • Pan-India Medicine Delivery
+        </p>
+      </div>
+
       <div className="max-w-4xl w-full grid grid-cols-1 md:grid-cols-2 gap-6">
         
         {/* Patient Portal Card (Left Side) */}
@@ -264,7 +281,7 @@ export default function Login() {
             </div>
             <p className="text-teal-50">Book video consultations, track live queue, and schedule visits.</p>
           </div>
-          <div className="p-8 flex flex-col gap-4 flex-grow justify-center">
+          <div className="p-8 flex flex-col gap-3.5 flex-grow justify-center">
             <button
               onClick={() => navigate('/book-appointment')}
               className="w-full flex items-center justify-center gap-2 bg-teal-600 hover:bg-teal-700 text-white font-semibold py-3.5 px-6 rounded-xl transition-all shadow-sm text-sm"
@@ -278,6 +295,13 @@ export default function Login() {
             >
               <Smartphone className="w-4 h-4" />
               Open Patient Tracker
+            </button>
+            <button
+              onClick={() => navigate('/track-courier')}
+              className="w-full flex items-center justify-center gap-2 bg-amber-500 hover:bg-amber-600 text-white font-semibold py-3.5 px-6 rounded-xl transition-all shadow-sm text-sm"
+            >
+              <Truck className="w-4 h-4" />
+              Track Medicine Courier
             </button>
             <button
               onClick={() => navigate('/reschedule')}
@@ -635,19 +659,18 @@ export default function Login() {
               </form>
             )}
 
-            {/* Waiting Room TV Link */}
-            <button 
-              onClick={() => navigate('/tv')}
-              className="w-full flex items-center justify-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold py-3 px-6 rounded-xl transition-all border border-slate-200 mt-2 text-sm"
-            >
-              <Monitor className="w-4 h-4" />
-              Open Waiting Room TV
-            </button>
-
           </div>
         </div>
 
       </div>
+
+      {/* Login Footer */}
+      <footer className="mt-8 text-center text-xs text-slate-500">
+        <p>© {new Date().getFullYear()} Krishna Homoeopathic Clinic. All rights reserved.</p>
+        <p className="mt-0.5">
+          Reception & Helpline: 05676350536 • WhatsApp: +91 6396535078
+        </p>
+      </footer>
     </div>
   );
 }
