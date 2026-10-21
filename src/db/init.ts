@@ -321,6 +321,19 @@ export async function initDb() {
       SET meet_link = 'https://meet.google.com/new'
       WHERE meet_link LIKE '%meet.jit.si%';
     `);
+
+    // Ensure default online_appointment_scheduled WhatsApp template is seeded
+    await pool.query(`
+      INSERT IGNORE INTO whatsapp_templates (id, name, trigger_event, language_code, variables, is_active)
+      VALUES (
+        'tpl_online_appointment_scheduled',
+        'online_appointment_scheduled',
+        'online_appointment_scheduled',
+        'en',
+        '["Name","Date","Time Slot","Appointment ID","Reception Helpline"]',
+        TRUE
+      );
+    `);
   } catch (err) {
     // Non-fatal backfill
   }

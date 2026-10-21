@@ -584,11 +584,16 @@ export function ClinicProvider({ children }: { children: React.ReactNode }) {
       type: "body",
       parameters: varKeys.map((k: string) => {
         let val = '';
-        if (k === 'Name') val = data.fullName || '';
+        if (k === 'Name') val = data.fullName || data.patientName || '';
         if (k === 'Patient ID') val = data.clinicId || '';
+        if (k === 'Appointment ID') val = data.appointmentId || data.id || '';
         if (k === 'Token Number') val = data.token || '';
         if (k === 'Age') val = (data.age || '').toString();
-        if (k === 'Date') val = data.dateStr || '';
+        if (k === 'Date') val = data.dateStr || data.date || '';
+        if (k === 'Time Slot') val = data.timeSlot || data.time || '';
+        if (k === 'Google Meet Link') val = data.meetLink || '';
+        if (k === 'Reception Helpline') val = data.helpline || '6396535078';
+        if (k === 'Health Concern') val = data.healthConcern || '';
         if (k === 'Wait Time') {
           // Calculate estimated wait time based on the live queue
           const todaysPatients = state.patients.filter(p => new Date(p.checkInTime).toLocaleDateString() === new Date().toLocaleDateString());

@@ -2165,6 +2165,115 @@ async function sendPatientEmail(s: any, to: string, subject: string, html: strin
   });
 }
 
+// Helper: Send automated WhatsApp template message based on trigger event
+async function sendAutomatedWhatsAppTemplate(eventName: string, data: any) {
+  try {
+    const [templates]: any = await pool.query(
+      `SELECT * FROM whatsapp_templates WHERE trigger_event = ? AND is_active = TRUE LIMIT 1`,
+      [eventName]
+    );
+    if (!templates || templates.length === 0) return;
+    const tpl = templates[0];
+
+    const dbSettings = await db.select().from(settings).where(eq(settings.id, "default")).limit(1);
+    const s = dbSettings[0];
+    if (!s?.whatsappApiKey || !s?.whatsappPhoneId) {
+      console.log(`[WhatsApp Auto] Skipped event "${eventName}" - Meta API credentials not set.`);
+      return;
+    }
+
+    let cleanPhone = String(data.phone || '').replace(/\D/g, '');
+    if (!cleanPhone) return;
+    if (cleanPhone.length === 10) cleanPhone = '91' + cleanPhone;
+
+    let varKeys: string[] = [];
+    try {
+      varKeys = typeof tpl.variables === 'string' ? JSON.parse(tpl.variables) : (tpl.variables || []);
+    } catch (e) {
+      varKeys = [];
+    }
+
+    const helplineNumber = (s.notification_contact_whatsapp || s.notification_contact_call || '6396535078').replace(/\D/g, '').slice(-10);
+
+    const bodyParams = varKeys.map((k: string) => {
+      let val = '';
+      if (k === 'Name') val = data.patientName || data.fullName || '';
+      else if (k === 'Appointment ID') val = data.appointmentId || data.id || '';
+      else if (k === 'Patient ID') val = data.clinicId || '';
+      else if (k === 'Date') val = data.date || data.dateStr || '';
+      else if (k === 'Time Slot') val = data.timeSlot || data.time || '';
+      else if (k === 'Google Meet Link') val = data.meetLink || '';
+      else if (k === 'Reception Helpline') val = helplineNumber || '6396535078';
+      else if (k === 'Health Concern') val = data.healthConcern || '';
+      else if (k === 'Token Number') val = String(data.token || '');
+      else if (k === 'Age') val = String(data.age || '');
+      else val = String(data[k] || '');
+      return { type: "text", text: String(val) };
+    });
+
+    const components: any[] = [];
+    if (bodyParams.length > 0) {
+      components.push({
+        type: "body",
+        parameters: bodyParams
+      });
+    }
+
+    // Dynamic URL button parameter for Google Meet if the template includes button CTA
+    if (data.meetLink) {
+      let meetCode = String(data.meetLink).trim();
+      const meetMatch = meetCode.match(/meet\.google\.com\/([a-z0-9\-]+)/i);
+      if (meetMatch && meetMatch[1]) {
+        meetCode = meetMatch[1];
+      }
+      components.push({
+        type: "button",
+        sub_type: "url",
+        index: "0",
+        parameters: [{ type: "text", text: meetCode }]
+      });
+    }
+
+    const payload = {
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to: cleanPhone,
+      type: "template",
+      template: {
+        name: tpl.name,
+        language: { code: tpl.language_code || 'en' },
+        components
+      }
+    };
+
+    console.log(`[WhatsApp Auto] Sending "${tpl.name}" for event "${eventName}" to ${cleanPhone}`);
+    const metaRes = await fetch(`https://graph.facebook.com/v17.0/${s.whatsappPhoneId}/messages`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${s.whatsappApiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+    const metaData: any = await metaRes.json();
+    console.log(`[WhatsApp Auto Response]:`, metaData);
+
+    const status = metaData.error ? 'failed' : 'sent';
+    const newMsg = {
+      id: Date.now().toString(),
+      phone: cleanPhone,
+      direction: 'outbound',
+      content: `[Auto Template: ${tpl.name}] - Online Appointment Scheduled (${data.date} ${data.timeSlot})`,
+      status,
+      timestamp: new Date()
+    };
+    await db.insert(whatsappMessages).values(newMsg);
+    notifyClients();
+  } catch (err: any) {
+    console.error(`[WhatsApp Auto] Error triggering template for ${eventName}:`, err);
+  }
+}
+
 // Helper: Calculate days between consultation date and today (handles timezones, clock skews, and same-day visits)
 function calculateDaysAgo(dateVal: any): number {
   if (!dateVal) return 999999;
@@ -3415,6 +3524,22 @@ app.post('/api/appointments/book-slot', async (req, res) => {
       console.error('[BookSlot] Staff notification failed:', notifyErr);
     }
     
+    // Send patient automated WhatsApp template notification if trigger is enabled
+    try {
+      await sendAutomatedWhatsAppTemplate('online_appointment_scheduled', {
+        phone: apt.phone,
+        patientName: apt.patient_name,
+        appointmentId,
+        clinicId,
+        date,
+        timeSlot: timeLabel,
+        meetLink,
+        healthConcern: apt.health_concern
+      });
+    } catch (waErr) {
+      console.error('[BookSlot] WhatsApp template failed:', waErr);
+    }
+
     notifyClients();
     res.json({ success: true, appointmentId, clinicId, meetLink, date, timeSlot: timeLabel });
   } catch (err: any) {

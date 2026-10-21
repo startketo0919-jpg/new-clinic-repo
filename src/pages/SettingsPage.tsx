@@ -132,7 +132,19 @@ export default function SettingsPage() {
   const [tplEvent, setTplEvent] = useState('new_patient');
   const [tplLang, setTplLang] = useState('en');
   const [tplVars, setTplVars] = useState<string[]>([]);
-  const availableVars = ['Name', 'Patient ID', 'Token Number', 'Age', 'Date', 'Wait Time'];
+  const availableVars = [
+    'Name',
+    'Appointment ID',
+    'Patient ID',
+    'Date',
+    'Time Slot',
+    'Google Meet Link',
+    'Reception Helpline',
+    'Health Concern',
+    'Token Number',
+    'Age',
+    'Wait Time'
+  ];
 
   // Promo Codes State (Admin only)
   const [promoCodes, setPromoCodes] = useState<any[]>([]);
@@ -449,6 +461,7 @@ export default function SettingsPage() {
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">When to send?</label>
                       <select value={tplEvent} onChange={e => setTplEvent(e.target.value)} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm">
+                        <option value="online_appointment_scheduled">When Online Appointment is Scheduled / Confirmed (Patient Notification)</option>
                         <option value="new_patient">When added to today's waiting queue</option>
                         <option value="pid_generated">When a new Patient ID (PID) is generated</option>
                         <option value="pid_generated_self">When a new PID is generated (Self Check-in)</option>
@@ -457,8 +470,8 @@ export default function SettingsPage() {
                         <option value="queue_new_self">When a NEW patient joins queue (Self Check-in)</option>
                         <option value="queue_old_staff">When an OLD patient joins queue (Staff Check-in)</option>
                         <option value="queue_new_staff">When a NEW patient joins queue (Staff Check-in)</option>
-                        <option value="appointment_scheduled">When future appointment is requested</option>
-                        <option value="appointment_approved">When appointment is approved for today</option>
+                        <option value="appointment_scheduled">When future in-clinic appointment is requested</option>
+                        <option value="appointment_approved">When in-clinic appointment is approved for today</option>
                         <option value="next_in_queue">When patient is next in line (previous patient entered cabin)</option>
                         <option value="follow_up">When follow-up date is set</option>
                       </select>
