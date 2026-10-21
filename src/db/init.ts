@@ -322,17 +322,28 @@ export async function initDb() {
       WHERE meet_link LIKE '%meet.jit.si%';
     `);
 
-    // Ensure default online_appointment_scheduled WhatsApp template is seeded
+    // Ensure default appointment_confirmed WhatsApp template is seeded
     await pool.query(`
-      INSERT IGNORE INTO whatsapp_templates (id, name, trigger_event, language_code, variables, is_active)
+      INSERT INTO whatsapp_templates (id, name, trigger_event, language_code, variables, is_active)
       VALUES (
-        'tpl_online_appointment_scheduled',
-        'online_appointment_scheduled',
+        'tpl_appointment_confirmed',
+        'appointment_confirmed',
         'online_appointment_scheduled',
         'en',
         '["Name","Date","Time Slot","Appointment ID","Reception Helpline"]',
         TRUE
-      );
+      )
+      ON DUPLICATE KEY UPDATE 
+        name = 'appointment_confirmed',
+        trigger_event = 'online_appointment_scheduled',
+        variables = '["Name","Date","Time Slot","Appointment ID","Reception Helpline"]';
+    `);
+
+    // Also update any previous 'online_appointment_scheduled' template name to 'appointment_confirmed'
+    await pool.query(`
+      UPDATE whatsapp_templates 
+      SET name = 'appointment_confirmed'
+      WHERE trigger_event = 'online_appointment_scheduled' OR name = 'online_appointment_scheduled';
     `);
   } catch (err) {
     // Non-fatal backfill
