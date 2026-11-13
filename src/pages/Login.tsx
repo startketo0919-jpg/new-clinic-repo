@@ -39,10 +39,13 @@ export default function Login() {
   const completeLogin = (user: any, token?: string) => {
     sessionStorage.setItem('staffAuthenticated', 'true');
     if (token) sessionStorage.setItem('staffAuthToken', token);
-    sessionStorage.setItem('userRole', user.role || 'admin');
+    sessionStorage.setItem('userRole', user.role || 'staff');
     sessionStorage.setItem('username', user.username || identifier);
     if (user.email) sessionStorage.setItem('userEmail', user.email);
-    navigate('/dashboard');
+    
+    const targetUrl = sessionStorage.getItem('postLoginRedirect') || '/dashboard';
+    sessionStorage.removeItem('postLoginRedirect');
+    navigate(targetUrl);
   };
 
   const handlePasswordSubmit = async (e: React.FormEvent) => {
@@ -304,13 +307,6 @@ export default function Login() {
               Track Medicine Courier
             </button>
             <button
-              onClick={() => navigate('/purchases')}
-              className="w-full flex items-center justify-center gap-2 bg-slate-700 hover:bg-slate-800 text-white font-semibold py-3.5 px-6 rounded-xl transition-all shadow-sm text-sm"
-            >
-              <Package className="w-4 h-4 text-teal-400" />
-              Purchase & Store Invoices
-            </button>
-            <button
               onClick={() => navigate('/reschedule')}
               className="text-sm text-slate-500 hover:text-slate-800 font-medium underline text-center mt-1"
             >
@@ -332,13 +328,32 @@ export default function Login() {
           <div className="p-8 flex flex-col gap-4 flex-grow justify-center">
             
             {step === 'start' ? (
-              <button 
-                onClick={() => { setStep('form'); setError(''); setSuccessMsg(''); }}
-                className="w-full flex items-center justify-center gap-2 bg-teal-600 hover:bg-teal-700 text-white font-semibold py-3 px-6 rounded-xl transition-all shadow-sm"
-              >
-                <UserRound className="w-5 h-5" />
-                Login to Dashboard
-              </button>
+              <div className="flex flex-col gap-3">
+                <button 
+                  onClick={() => { 
+                    sessionStorage.removeItem('postLoginRedirect');
+                    setStep('form'); 
+                    setError(''); 
+                    setSuccessMsg(''); 
+                  }}
+                  className="w-full flex items-center justify-center gap-2 bg-teal-600 hover:bg-teal-700 text-white font-semibold py-3.5 px-6 rounded-xl transition-all shadow-sm"
+                >
+                  <UserRound className="w-5 h-5" />
+                  Login to Clinic Dashboard
+                </button>
+                <button 
+                  onClick={() => { 
+                    sessionStorage.setItem('postLoginRedirect', '/purchases');
+                    setStep('form'); 
+                    setError(''); 
+                    setSuccessMsg(''); 
+                  }}
+                  className="w-full flex items-center justify-center gap-2 bg-slate-700 hover:bg-slate-800 text-white font-semibold py-3.5 px-6 rounded-xl transition-all shadow-sm text-sm border border-slate-600"
+                >
+                  <Package className="w-4 h-4 text-teal-400" />
+                  Staff Login for Purchases & Invoices
+                </button>
+              </div>
             ) : step === 'form' ? (
               <div>
                 {/* Auth Mode Toggle */}

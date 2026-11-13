@@ -4793,27 +4793,129 @@ setInterval(async () => {
     }
   });
 
-  // List Purchases with Role-Based Time Window (Staff: default 30 days; Admin/Doctor: All-time)
+  // Visual Analytics for Purchase Dashboard (Defined BEFORE /api/purchases/:id to avoid route collision)
+  app.get("/api/purchases/analytics", async (req, res) => {
+    try {
+      const startDate = req.query.startDate as string;
+      const endDate = req.query.endDate as string;
+
+      let allInvoices = await db.select().from(purchaseInvoices).orderBy(desc(purchaseInvoices.receivedDate));
+      
+      // Filter by custom date intervals if supplied
+      if (startDate || endDate) {
+        allInvoices = allInvoices.filter(inv => {
+          const invDate = inv.invoiceDate || '';
+          if (startDate && invDate < startDate) return false;
+          if (endDate && invDate > endDate) return false;
+          return true;
+        });
+      }
+
+      let totalSpend = 0;
+      let totalClinic = 0;
+      let totalStore = 0;
+      let totalPaid = 0;
+      let totalUnpaid = 0;
+      let pendingErpCount = 0;
+
+      const wholesalerMap: Record<string, { name: string; city: string; amount: number; count: number }> = {};
+      const monthlyMap: Record<string, { month: string; clinic: number; store: number; total: number }> = {};
+      const cityMap: Record<string, number> = {};
+
+      allInvoices.forEach(inv => {
+        const amt = Number(inv.totalAmount || 0);
+        const cAmt = Number(inv.clinicAmount || (inv.destinationType === 'Clinic' ? amt : 0));
+        const sAmt = Number(inv.storeAmount || (inv.destinationType === 'Store' ? amt : 0));
+        
+        totalSpend += amt;
+        totalClinic += cAmt;
+        totalStore += sAmt;
+
+        if (inv.paymentStatus === 'Paid') {
+          totalPaid += (Number(inv.paidAmount) || amt);
+        } else {
+          totalUnpaid += amt;
+        }
+
+        if (inv.erpStatus !== 'Completed') {
+          pendingErpCount += 1;
+        }
+
+        const wsKey = inv.wholesalerId || inv.wholesalerName;
+        if (!wholesalerMap[wsKey]) {
+          wholesalerMap[wsKey] = { name: inv.wholesalerName, city: inv.wholesalerCity, amount: 0, count: 0 };
+        }
+        wholesalerMap[wsKey].amount += amt;
+        wholesalerMap[wsKey].count += 1;
+
+        const city = inv.wholesalerCity || 'Other';
+        cityMap[city] = (cityMap[city] || 0) + amt;
+
+        const monthKey = inv.invoiceDate ? inv.invoiceDate.substring(0, 7) : 'Recent';
+        if (!monthlyMap[monthKey]) {
+          monthlyMap[monthKey] = { month: monthKey, clinic: 0, store: 0, total: 0 };
+        }
+        monthlyMap[monthKey].clinic += cAmt;
+        monthlyMap[monthKey].store += sAmt;
+        monthlyMap[monthKey].total += amt;
+      });
+
+      const topWholesalers = Object.values(wholesalerMap).sort((a, b) => b.amount - a.amount);
+      const monthlyTrend = Object.values(monthlyMap).sort((a, b) => a.month.localeCompare(b.month));
+      const cityBreakdown = Object.entries(cityMap).map(([city, amount]) => ({ city, amount })).sort((a, b) => b.amount - a.amount);
+
+      res.json({
+        totalSpend,
+        totalClinic,
+        totalStore,
+        totalPaid,
+        totalUnpaid,
+        totalInvoices: allInvoices.length,
+        pendingErpCount,
+        topWholesalers,
+        monthlyTrend,
+        cityBreakdown,
+        startDate: startDate || null,
+        endDate: endDate || null
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: "Failed to generate analytics", details: err.message });
+    }
+  });
+
+  // List Purchases with Custom Date Intervals & Role-Based Time Window
   app.get("/api/purchases", async (req, res) => {
     try {
       const clientRole = (req.headers['x-user-role'] as string) || 'staff';
+      const startDate = req.query.startDate as string;
+      const endDate = req.query.endDate as string;
+      const showAll = req.query.all === 'true';
+
       const settingsRow = await db.select().from(settings).where(eq(settings.id, "default")).limit(1);
       const windowDays = settingsRow[0]?.purchaseStaffViewWindowDays || 30;
 
-      let invoices = [];
-      if (clientRole === 'staff') {
-        const cutoffDate = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
-        invoices = await db.select()
-          .from(purchaseInvoices)
-          .where(gte(purchaseInvoices.receivedDate, cutoffDate))
-          .orderBy(desc(purchaseInvoices.receivedDate));
-      } else {
-        invoices = await db.select()
-          .from(purchaseInvoices)
-          .orderBy(desc(purchaseInvoices.receivedDate));
+      let allInvoices = await db.select()
+        .from(purchaseInvoices)
+        .orderBy(desc(purchaseInvoices.receivedDate));
+
+      // Filter by custom date intervals if supplied
+      if (startDate || endDate) {
+        allInvoices = allInvoices.filter(inv => {
+          const invDate = inv.invoiceDate || '';
+          if (startDate && invDate < startDate) return false;
+          if (endDate && invDate > endDate) return false;
+          return true;
+        });
+      } else if (clientRole === 'staff' && !showAll) {
+        // Default staff view cutoff window
+        const cutoffTime = Date.now() - windowDays * 24 * 60 * 60 * 1000;
+        allInvoices = allInvoices.filter(inv => {
+          const t = inv.receivedDate ? new Date(inv.receivedDate).getTime() : 0;
+          return t >= cutoffTime;
+        });
       }
 
-      res.json({ invoices, windowDays, role: clientRole });
+      res.json({ invoices: allInvoices, windowDays, role: clientRole });
     } catch (err: any) {
       res.status(500).json({ error: "Failed to fetch purchase invoices", details: err.message });
     }
@@ -4994,81 +5096,6 @@ setInterval(async () => {
       res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ error: "Failed to delete purchase invoice", details: err.message });
-    }
-  });
-
-  // Visual Analytics for Purchase Dashboard
-  app.get("/api/purchases/analytics", async (req, res) => {
-    try {
-      const allInvoices = await db.select().from(purchaseInvoices).orderBy(desc(purchaseInvoices.receivedDate));
-      
-      let totalSpend = 0;
-      let totalClinic = 0;
-      let totalStore = 0;
-      let totalPaid = 0;
-      let totalUnpaid = 0;
-      let pendingErpCount = 0;
-
-      const wholesalerMap: Record<string, { name: string; city: string; amount: number; count: number }> = {};
-      const monthlyMap: Record<string, { month: string; clinic: number; store: number; total: number }> = {};
-      const cityMap: Record<string, number> = {};
-
-      allInvoices.forEach(inv => {
-        const amt = Number(inv.totalAmount || 0);
-        const cAmt = Number(inv.clinicAmount || (inv.destinationType === 'Clinic' ? amt : 0));
-        const sAmt = Number(inv.storeAmount || (inv.destinationType === 'Store' ? amt : 0));
-        
-        totalSpend += amt;
-        totalClinic += cAmt;
-        totalStore += sAmt;
-
-        if (inv.paymentStatus === 'Paid') {
-          totalPaid += (Number(inv.paidAmount) || amt);
-        } else {
-          totalUnpaid += amt;
-        }
-
-        if (inv.erpStatus !== 'Completed') {
-          pendingErpCount += 1;
-        }
-
-        const wsKey = inv.wholesalerId || inv.wholesalerName;
-        if (!wholesalerMap[wsKey]) {
-          wholesalerMap[wsKey] = { name: inv.wholesalerName, city: inv.wholesalerCity, amount: 0, count: 0 };
-        }
-        wholesalerMap[wsKey].amount += amt;
-        wholesalerMap[wsKey].count += 1;
-
-        const city = inv.wholesalerCity || 'Other';
-        cityMap[city] = (cityMap[city] || 0) + amt;
-
-        const monthKey = inv.invoiceDate ? inv.invoiceDate.substring(0, 7) : 'Recent';
-        if (!monthlyMap[monthKey]) {
-          monthlyMap[monthKey] = { month: monthKey, clinic: 0, store: 0, total: 0 };
-        }
-        monthlyMap[monthKey].clinic += cAmt;
-        monthlyMap[monthKey].store += sAmt;
-        monthlyMap[monthKey].total += amt;
-      });
-
-      const topWholesalers = Object.values(wholesalerMap).sort((a, b) => b.amount - a.amount);
-      const monthlyTrend = Object.values(monthlyMap).sort((a, b) => a.month.localeCompare(b.month));
-      const cityBreakdown = Object.entries(cityMap).map(([city, amount]) => ({ city, amount })).sort((a, b) => b.amount - a.amount);
-
-      res.json({
-        totalSpend,
-        totalClinic,
-        totalStore,
-        totalPaid,
-        totalUnpaid,
-        totalInvoices: allInvoices.length,
-        pendingErpCount,
-        topWholesalers,
-        monthlyTrend,
-        cityBreakdown
-      });
-    } catch (err: any) {
-      res.status(500).json({ error: "Failed to generate analytics", details: err.message });
     }
   });
 

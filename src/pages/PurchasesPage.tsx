@@ -39,6 +39,15 @@ import { Wholesaler, PurchaseInvoice, PurchaseItem, DestinationType, PurchasePay
 export default function PurchasesPage() {
   const navigate = useNavigate();
 
+  // Authentication Guard: Ensure user is logged in
+  const isAuth = sessionStorage.getItem('staffAuthenticated') === 'true';
+  useEffect(() => {
+    if (!isAuth) {
+      sessionStorage.setItem('postLoginRedirect', '/purchases');
+      navigate('/login');
+    }
+  }, [isAuth, navigate]);
+
   // User session & role
   const userRole = sessionStorage.getItem('userRole') || 'staff';
   const username = sessionStorage.getItem('username') || 'Staff User';
@@ -59,6 +68,11 @@ export default function PurchasesPage() {
   const [destinationFilter, setDestinationFilter] = useState<'All' | 'Clinic' | 'Store' | 'Split'>('All');
   const [paymentFilter, setPaymentFilter] = useState<'All' | 'Paid' | 'Unpaid'>('All');
   const [wholesalerFilter, setWholesalerFilter] = useState<string>('All');
+
+  // Custom Date Interval Filter State
+  const [dateInterval, setDateInterval] = useState<'all' | 'today' | 'this_week' | 'this_month' | 'last_month' | 'last_30_days' | 'last_90_days' | 'fy' | 'custom'>('all');
+  const [customStartDate, setCustomStartDate] = useState('');
+  const [customEndDate, setCustomEndDate] = useState('');
 
   // Modals
   const [selectedInvoiceForSlip, setSelectedInvoiceForSlip] = useState<PurchaseInvoice | null>(null);
@@ -149,7 +163,7 @@ export default function PurchasesPage() {
       };
 
       const [invRes, wsRes, anaRes] = await Promise.all([
-        fetch('/api/purchases', { headers }),
+        fetch('/api/purchases?all=true', { headers }),
         fetch('/api/wholesalers', { headers }),
         fetch('/api/purchases/analytics', { headers })
       ]);
@@ -505,7 +519,57 @@ export default function PurchasesPage() {
     }
   };
 
-  // Filtered invoices
+  // Calculate Effective Date Boundaries from selected Interval
+  const { effectiveStartDate, effectiveEndDate, intervalLabel } = useMemo(() => {
+    const today = new Date();
+    const pad = (n: number) => n.toString().padStart(2, '0');
+    const toYMD = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
+    if (dateInterval === 'today') {
+      const d = toYMD(today);
+      return { effectiveStartDate: d, effectiveEndDate: d, intervalLabel: `Today (${d})` };
+    }
+    if (dateInterval === 'this_week') {
+      const curr = new Date(today);
+      const day = curr.getDay(); // 0 is Sun
+      const diff = curr.getDate() - day + (day === 0 ? -6 : 1);
+      const mon = new Date(curr.setDate(diff));
+      return { effectiveStartDate: toYMD(mon), effectiveEndDate: toYMD(today), intervalLabel: 'This Week' };
+    }
+    if (dateInterval === 'this_month') {
+      const start = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-01`;
+      return { effectiveStartDate: start, effectiveEndDate: toYMD(today), intervalLabel: `This Month (${today.toLocaleString('default', { month: 'short', year: 'numeric' })})` };
+    }
+    if (dateInterval === 'last_month') {
+      const prev = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+      const lastDay = new Date(today.getFullYear(), today.getMonth(), 0);
+      return { effectiveStartDate: toYMD(prev), effectiveEndDate: toYMD(lastDay), intervalLabel: `Last Month (${prev.toLocaleString('default', { month: 'short', year: 'numeric' })})` };
+    }
+    if (dateInterval === 'last_30_days') {
+      const d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      return { effectiveStartDate: toYMD(d), effectiveEndDate: toYMD(today), intervalLabel: 'Last 30 Days' };
+    }
+    if (dateInterval === 'last_90_days') {
+      const d = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+      return { effectiveStartDate: toYMD(d), effectiveEndDate: toYMD(today), intervalLabel: 'Last 90 Days' };
+    }
+    if (dateInterval === 'fy') {
+      const year = today.getMonth() >= 3 ? today.getFullYear() : today.getFullYear() - 1;
+      const start = `${year}-04-01`;
+      const end = `${year + 1}-03-31`;
+      return { effectiveStartDate: start, effectiveEndDate: end, intervalLabel: `FY ${year}-${year + 1}` };
+    }
+    if (dateInterval === 'custom') {
+      return { 
+        effectiveStartDate: customStartDate, 
+        effectiveEndDate: customEndDate, 
+        intervalLabel: (customStartDate || customEndDate) ? `${customStartDate || 'Any'} to ${customEndDate || 'Present'}` : 'Custom Date Interval' 
+      };
+    }
+    return { effectiveStartDate: '', effectiveEndDate: '', intervalLabel: 'All-Time' };
+  }, [dateInterval, customStartDate, customEndDate]);
+
+  // Filtered invoices with Search, Categories, and Custom Date Intervals
   const filteredInvoices = useMemo(() => {
     return invoices.filter(inv => {
       const matchesSearch = 
@@ -518,9 +582,92 @@ export default function PurchasesPage() {
       const matchesPay = paymentFilter === 'All' || inv.paymentStatus === paymentFilter;
       const matchesWs = wholesalerFilter === 'All' || inv.wholesalerId === wholesalerFilter;
 
-      return matchesSearch && matchesDest && matchesPay && matchesWs;
+      let matchesDate = true;
+      const invDate = inv.invoiceDate || '';
+      if (effectiveStartDate && invDate < effectiveStartDate) matchesDate = false;
+      if (effectiveEndDate && invDate > effectiveEndDate) matchesDate = false;
+
+      return matchesSearch && matchesDest && matchesPay && matchesWs && matchesDate;
     });
-  }, [invoices, searchQuery, destinationFilter, paymentFilter, wholesalerFilter]);
+  }, [invoices, searchQuery, destinationFilter, paymentFilter, wholesalerFilter, effectiveStartDate, effectiveEndDate]);
+
+  // Dynamic Real-Time Analytics derived from filtered entries
+  const computedAnalytics = useMemo(() => {
+    let totalSpend = 0;
+    let totalClinic = 0;
+    let totalStore = 0;
+    let totalPaid = 0;
+    let totalUnpaid = 0;
+    let pendingErpCount = 0;
+
+    const wholesalerMap: Record<string, { name: string; city: string; amount: number; count: number }> = {};
+    const monthlyMap: Record<string, { month: string; clinic: number; store: number; total: number }> = {};
+    const cityMap: Record<string, number> = {};
+
+    filteredInvoices.forEach(inv => {
+      const amt = Number(inv.totalAmount || 0);
+      const cAmt = Number(inv.clinicAmount || (inv.destinationType === 'Clinic' ? amt : 0));
+      const sAmt = Number(inv.storeAmount || (inv.destinationType === 'Store' ? amt : 0));
+
+      totalSpend += amt;
+      totalClinic += cAmt;
+      totalStore += sAmt;
+
+      if (inv.paymentStatus === 'Paid') {
+        totalPaid += (Number(inv.paidAmount) || amt);
+      } else {
+        totalUnpaid += amt;
+      }
+
+      if (inv.erpStatus !== 'Completed') {
+        pendingErpCount += 1;
+      }
+
+      const wsKey = inv.wholesalerId || inv.wholesalerName;
+      if (!wholesalerMap[wsKey]) {
+        wholesalerMap[wsKey] = { name: inv.wholesalerName, city: inv.wholesalerCity, amount: 0, count: 0 };
+      }
+      wholesalerMap[wsKey].amount += amt;
+      wholesalerMap[wsKey].count += 1;
+
+      const city = inv.wholesalerCity || 'Other';
+      cityMap[city] = (cityMap[city] || 0) + amt;
+
+      const monthKey = inv.invoiceDate ? inv.invoiceDate.substring(0, 7) : 'Recent';
+      if (!monthlyMap[monthKey]) {
+        monthlyMap[monthKey] = { month: monthKey, clinic: 0, store: 0, total: 0 };
+      }
+      monthlyMap[monthKey].clinic += cAmt;
+      monthlyMap[monthKey].store += sAmt;
+      monthlyMap[monthKey].total += amt;
+    });
+
+    const topWholesalers = Object.values(wholesalerMap).sort((a, b) => b.amount - a.amount);
+    const monthlyTrend = Object.values(monthlyMap).sort((a, b) => a.month.localeCompare(b.month));
+    const cityBreakdown = Object.entries(cityMap).map(([city, amount]) => ({ city, amount })).sort((a, b) => b.amount - a.amount);
+
+    return {
+      totalSpend,
+      totalClinic,
+      totalStore,
+      totalPaid,
+      totalUnpaid,
+      totalInvoices: filteredInvoices.length,
+      pendingErpCount,
+      topWholesalers,
+      monthlyTrend,
+      cityBreakdown
+    };
+  }, [filteredInvoices]);
+
+  // Merged Active Analytics (Live Client-Side Calculation + Backend Fallback)
+  const activeAnalytics = useMemo(() => {
+    // If we have invoices loaded or filtered, computedAnalytics is authoritative for the selected date interval
+    if (invoices.length > 0 || (effectiveStartDate || effectiveEndDate)) {
+      return computedAnalytics;
+    }
+    return analytics || computedAnalytics;
+  }, [invoices.length, effectiveStartDate, effectiveEndDate, computedAnalytics, analytics]);
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans flex flex-col">
@@ -633,6 +780,83 @@ export default function PurchasesPage() {
         {/* ========================================================================= */}
         {activeTab === 'analytics' && (
           <div className="space-y-6">
+
+            {/* Date Interval Bar for Analytics */}
+            <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-sm flex flex-col md:flex-row gap-4 items-center justify-between">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Calendar className="w-4 h-4 text-teal-600" />
+                  <h3 className="font-bold text-slate-800 text-sm">Analytics Date Interval</h3>
+                  <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-teal-50 text-teal-700 border border-teal-200">
+                    {intervalLabel}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Showing procurement metrics for {filteredInvoices.length} matching {filteredInvoices.length === 1 ? 'bill' : 'bills'}
+                </p>
+              </div>
+
+              {/* Interval Preset Pills */}
+              <div className="flex flex-wrap items-center gap-1.5 w-full md:w-auto">
+                {[
+                  { id: 'all', label: 'All-Time' },
+                  { id: 'today', label: 'Today' },
+                  { id: 'this_week', label: 'This Week' },
+                  { id: 'this_month', label: 'This Month' },
+                  { id: 'last_month', label: 'Last Month' },
+                  { id: 'last_30_days', label: '30 Days' },
+                  { id: 'last_90_days', label: '90 Days' },
+                  { id: 'custom', label: 'Custom Range' },
+                ].map(p => (
+                  <button
+                    key={p.id}
+                    onClick={() => setDateInterval(p.id as any)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                      dateInterval === p.id 
+                        ? 'bg-teal-600 text-white shadow-sm' 
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-900'
+                    }`}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Custom Range Date Pickers (Shown if Custom Range is selected) */}
+            {dateInterval === 'custom' && (
+              <div className="bg-teal-50/70 border border-teal-200 rounded-2xl p-4 flex flex-wrap items-center gap-4 text-xs">
+                <span className="font-bold text-teal-900 flex items-center gap-1.5">
+                  <Calendar className="w-4 h-4 text-teal-600" /> Custom Range:
+                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-600 font-medium">From:</span>
+                  <input
+                    type="date"
+                    value={customStartDate}
+                    onChange={e => setCustomStartDate(e.target.value)}
+                    className="bg-white border border-slate-300 rounded-xl px-3 py-1.5 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-600 font-medium">To:</span>
+                  <input
+                    type="date"
+                    value={customEndDate}
+                    onChange={e => setCustomEndDate(e.target.value)}
+                    className="bg-white border border-slate-300 rounded-xl px-3 py-1.5 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                  />
+                </div>
+                {(customStartDate || customEndDate) && (
+                  <button
+                    onClick={() => { setCustomStartDate(''); setCustomEndDate(''); setDateInterval('all'); }}
+                    className="ml-auto text-xs font-semibold text-rose-600 hover:text-rose-800 underline"
+                  >
+                    Reset to All-Time
+                  </button>
+                )}
+              </div>
+            )}
             
             {/* KPI Cards Row */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -646,10 +870,10 @@ export default function PurchasesPage() {
                 </div>
                 <div className="mt-3">
                   <div className="text-2xl font-black text-slate-900">
-                    ₹{(analytics?.totalSpend || 0).toLocaleString('en-IN')}
+                    ₹{(activeAnalytics.totalSpend || 0).toLocaleString('en-IN')}
                   </div>
                   <div className="text-xs text-slate-500 mt-1 flex items-center gap-1.5">
-                    <span>{analytics?.totalInvoices || 0} total invoices recorded</span>
+                    <span>{activeAnalytics.totalInvoices || 0} total invoices recorded</span>
                   </div>
                 </div>
               </div>
@@ -667,14 +891,14 @@ export default function PurchasesPage() {
                       <span className="w-2.5 h-2.5 rounded-full bg-teal-500 inline-block"></span>
                       Clinic:
                     </span>
-                    <strong className="text-slate-900 font-bold">₹{(analytics?.totalClinic || 0).toLocaleString('en-IN')}</strong>
+                    <strong className="text-slate-900 font-bold">₹{(activeAnalytics.totalClinic || 0).toLocaleString('en-IN')}</strong>
                   </div>
                   <div className="flex items-baseline justify-between text-sm mt-1">
                     <span className="text-slate-600 font-medium flex items-center gap-1">
                       <span className="w-2.5 h-2.5 rounded-full bg-indigo-500 inline-block"></span>
                       Store:
                     </span>
-                    <strong className="text-slate-900 font-bold">₹{(analytics?.totalStore || 0).toLocaleString('en-IN')}</strong>
+                    <strong className="text-slate-900 font-bold">₹{(activeAnalytics.totalStore || 0).toLocaleString('en-IN')}</strong>
                   </div>
                 </div>
               </div>
@@ -689,11 +913,11 @@ export default function PurchasesPage() {
                 <div className="mt-3">
                   <div className="flex items-baseline justify-between text-sm">
                     <span className="text-emerald-700 font-medium">Paid:</span>
-                    <strong className="text-emerald-700 font-bold">₹{(analytics?.totalPaid || 0).toLocaleString('en-IN')}</strong>
+                    <strong className="text-emerald-700 font-bold">₹{(activeAnalytics.totalPaid || 0).toLocaleString('en-IN')}</strong>
                   </div>
                   <div className="flex items-baseline justify-between text-sm mt-1">
                     <span className="text-rose-600 font-medium">Unpaid Dues:</span>
-                    <strong className="text-rose-600 font-bold">₹{(analytics?.totalUnpaid || 0).toLocaleString('en-IN')}</strong>
+                    <strong className="text-rose-600 font-bold">₹{(activeAnalytics.totalUnpaid || 0).toLocaleString('en-IN')}</strong>
                   </div>
                 </div>
               </div>
@@ -707,7 +931,7 @@ export default function PurchasesPage() {
                 </div>
                 <div className="mt-3">
                   <div className="text-2xl font-black text-slate-900">
-                    {analytics?.pendingErpCount || 0}
+                    {activeAnalytics.pendingErpCount || 0}
                   </div>
                   <div className="text-xs text-amber-600 font-semibold mt-1 flex items-center gap-1">
                     <Clock className="w-3.5 h-3.5" />
@@ -726,17 +950,17 @@ export default function PurchasesPage() {
                 <div className="flex items-center justify-between mb-4">
                   <div>
                     <h3 className="font-bold text-slate-900 text-base">Wholesaler-Wise Procurement</h3>
-                    <p className="text-xs text-slate-500">Ranked by total purchase value across cities</p>
+                    <p className="text-xs text-slate-500">Ranked by total purchase value across cities ({intervalLabel})</p>
                   </div>
                   <span className="text-xs font-semibold px-2.5 py-1 bg-slate-100 text-slate-700 rounded-full">
-                    {analytics?.topWholesalers?.length || 0} Suppliers
+                    {activeAnalytics.topWholesalers?.length || 0} Suppliers
                   </span>
                 </div>
 
                 <div className="space-y-3.5 mt-4">
-                  {analytics?.topWholesalers && analytics.topWholesalers.length > 0 ? (
-                    analytics.topWholesalers.slice(0, 6).map((ws: any, idx: number) => {
-                      const maxAmount = analytics.topWholesalers[0].amount || 1;
+                  {activeAnalytics.topWholesalers && activeAnalytics.topWholesalers.length > 0 ? (
+                    activeAnalytics.topWholesalers.slice(0, 6).map((ws: any, idx: number) => {
+                      const maxAmount = activeAnalytics.topWholesalers[0].amount || 1;
                       const percent = Math.min(100, Math.round((ws.amount / maxAmount) * 100));
 
                       return (
@@ -767,7 +991,7 @@ export default function PurchasesPage() {
                       );
                     })
                   ) : (
-                    <p className="text-sm text-slate-400 italic py-6 text-center">No wholesaler purchase data yet.</p>
+                    <p className="text-sm text-slate-400 italic py-6 text-center">No wholesaler purchase data recorded for this date interval.</p>
                   )}
                 </div>
               </div>
@@ -776,11 +1000,11 @@ export default function PurchasesPage() {
               <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm flex flex-col justify-between">
                 <div>
                   <h3 className="font-bold text-slate-900 text-base mb-1">Procurement by City</h3>
-                  <p className="text-xs text-slate-500 mb-4">Distribution of orders from various cities</p>
+                  <p className="text-xs text-slate-500 mb-4">Distribution of orders from various cities ({intervalLabel})</p>
 
                   <div className="space-y-3">
-                    {analytics?.cityBreakdown && analytics.cityBreakdown.length > 0 ? (
-                      analytics.cityBreakdown.slice(0, 5).map((c: any, i: number) => (
+                    {activeAnalytics.cityBreakdown && activeAnalytics.cityBreakdown.length > 0 ? (
+                      activeAnalytics.cityBreakdown.slice(0, 5).map((c: any, i: number) => (
                         <div key={i} className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 border border-slate-100 text-xs">
                           <div className="flex items-center gap-2">
                             <MapPin className="w-4 h-4 text-teal-600 shrink-0" />
@@ -790,7 +1014,7 @@ export default function PurchasesPage() {
                         </div>
                       ))
                     ) : (
-                      <p className="text-sm text-slate-400 italic py-4 text-center">No city data available.</p>
+                      <p className="text-sm text-slate-400 italic py-4 text-center">No city data available for this date interval.</p>
                     )}
                   </div>
                 </div>
@@ -798,14 +1022,14 @@ export default function PurchasesPage() {
                 {/* Quick Split Progress */}
                 <div className="pt-6 border-t border-slate-100 mt-6">
                   <div className="flex justify-between text-xs font-semibold text-slate-600 mb-2">
-                    <span>Clinic Share ({analytics?.totalSpend > 0 ? Math.round((analytics.totalClinic / analytics.totalSpend) * 100) : 0}%)</span>
-                    <span>Store Share ({analytics?.totalSpend > 0 ? Math.round((analytics.totalStore / analytics.totalSpend) * 100) : 0}%)</span>
+                    <span>Clinic Share ({activeAnalytics.totalSpend > 0 ? Math.round((activeAnalytics.totalClinic / activeAnalytics.totalSpend) * 100) : 0}%)</span>
+                    <span>Store Share ({activeAnalytics.totalSpend > 0 ? Math.round((activeAnalytics.totalStore / activeAnalytics.totalSpend) * 100) : 0}%)</span>
                   </div>
                   <div className="w-full h-3 rounded-full bg-indigo-500 flex overflow-hidden">
                     <div
                       className="bg-teal-500 h-full transition-all duration-500"
                       style={{
-                        width: `${analytics?.totalSpend > 0 ? (analytics.totalClinic / analytics.totalSpend) * 100 : 50}%`
+                        width: `${activeAnalytics.totalSpend > 0 ? (activeAnalytics.totalClinic / activeAnalytics.totalSpend) * 100 : 50}%`
                       }}
                     ></div>
                   </div>
@@ -820,8 +1044,8 @@ export default function PurchasesPage() {
               <p className="text-xs text-slate-500 mb-6">Tracking medicine purchase expenditure over time</p>
 
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
-                {analytics?.monthlyTrend && analytics.monthlyTrend.length > 0 ? (
-                  analytics.monthlyTrend.map((m: any, i: number) => (
+                {activeAnalytics.monthlyTrend && activeAnalytics.monthlyTrend.length > 0 ? (
+                  activeAnalytics.monthlyTrend.map((m: any, i: number) => (
                     <div key={i} className="bg-slate-50 rounded-xl p-3.5 border border-slate-200/80 text-center flex flex-col justify-between">
                       <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">{m.month}</span>
                       <div className="my-2">
@@ -906,6 +1130,42 @@ export default function PurchasesPage() {
                   ))}
                 </select>
 
+                {/* Date Interval Filter */}
+                <select
+                  value={dateInterval}
+                  onChange={e => setDateInterval(e.target.value as any)}
+                  className="bg-slate-50 border border-slate-200 text-xs font-semibold py-2 px-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500"
+                >
+                  <option value="all">All Dates</option>
+                  <option value="today">Today</option>
+                  <option value="this_week">This Week</option>
+                  <option value="this_month">This Month</option>
+                  <option value="last_month">Last Month</option>
+                  <option value="last_30_days">Last 30 Days</option>
+                  <option value="last_90_days">Last 90 Days</option>
+                  <option value="fy">Financial Year</option>
+                  <option value="custom">Custom Date Range...</option>
+                </select>
+
+                {dateInterval === 'custom' && (
+                  <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 px-2 py-1 rounded-xl">
+                    <span className="text-[10px] text-slate-500 font-semibold uppercase">From:</span>
+                    <input
+                      type="date"
+                      value={customStartDate}
+                      onChange={e => setCustomStartDate(e.target.value)}
+                      className="bg-white border border-slate-200 text-xs py-1 px-1.5 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500"
+                    />
+                    <span className="text-[10px] text-slate-500 font-semibold uppercase">To:</span>
+                    <input
+                      type="date"
+                      value={customEndDate}
+                      onChange={e => setCustomEndDate(e.target.value)}
+                      className="bg-white border border-slate-200 text-xs py-1 px-1.5 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500"
+                    />
+                  </div>
+                )}
+
                 <button
                   onClick={() => setActiveTab('new-entry')}
                   className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-semibold text-xs shadow-sm transition-all"
@@ -915,6 +1175,34 @@ export default function PurchasesPage() {
                 </button>
               </div>
 
+            </div>
+
+            {/* Filter Summary & Count Badge */}
+            <div className="flex flex-wrap items-center justify-between text-xs px-1 text-slate-500 gap-2">
+              <div className="flex items-center gap-2">
+                <span>Showing <strong>{filteredInvoices.length}</strong> of <strong>{invoices.length}</strong> invoices</span>
+                {intervalLabel !== 'All-Time' && (
+                  <span className="px-2 py-0.5 rounded-full bg-teal-50 text-teal-700 border border-teal-200 font-medium text-[11px] flex items-center gap-1">
+                    <Calendar className="w-3 h-3" /> {intervalLabel}
+                  </span>
+                )}
+              </div>
+              {(searchQuery || destinationFilter !== 'All' || paymentFilter !== 'All' || wholesalerFilter !== 'All' || dateInterval !== 'all' || customStartDate || customEndDate) && (
+                <button
+                  onClick={() => {
+                    setSearchQuery('');
+                    setDestinationFilter('All');
+                    setPaymentFilter('All');
+                    setWholesalerFilter('All');
+                    setDateInterval('all');
+                    setCustomStartDate('');
+                    setCustomEndDate('');
+                  }}
+                  className="text-teal-600 hover:text-teal-800 font-semibold text-xs flex items-center gap-1"
+                >
+                  <X className="w-3 h-3" /> Clear All Filters
+                </button>
+              )}
             </div>
 
             {/* Role Notice for Staff */}
