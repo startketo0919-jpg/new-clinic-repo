@@ -36,6 +36,7 @@ interface ClinicContextType {
   markShipmentStatus: (id: string, status: 'Pending' | 'Completed') => Promise<void>;
   deleteShipment: (id: string) => Promise<void>;
   nextSequence: number;
+  fetchState: () => Promise<void>;
 }
 
 const ClinicContext = createContext<ClinicContextType | undefined>(undefined);
@@ -57,7 +58,13 @@ export function ClinicProvider({ children }: { children: React.ReactNode }) {
 
   const fetchState = async () => {
     try {
-      const res = await fetch('/api/state');
+      const res = await fetch(`/api/state?_t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: {
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache'
+        }
+      });
       if (res.ok) {
         const data = await res.json();
         setState(prev => ({
@@ -81,13 +88,55 @@ export function ClinicProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     fetchState();
-    const eventSource = new EventSource('/api/events');
-    eventSource.onmessage = (event) => {
-      if (event.data === 'update') {
-        fetchState();
+
+    // Auto-reconnecting SSE connection
+    let eventSource: EventSource | null = null;
+    let reconnectTimeout: any = null;
+    let isMounted = true;
+
+    const setupSSE = () => {
+      if (!isMounted) return;
+      if (eventSource) {
+        try { eventSource.close(); } catch {}
+      }
+
+      try {
+        eventSource = new EventSource('/api/events');
+        eventSource.onmessage = (event) => {
+          if (event.data === 'update') {
+            fetchState();
+          }
+        };
+        eventSource.onerror = () => {
+          try { eventSource?.close(); } catch {}
+          if (isMounted) {
+            clearTimeout(reconnectTimeout);
+            reconnectTimeout = setTimeout(setupSSE, 3000);
+          }
+        };
+      } catch (err) {
+        if (isMounted) {
+          clearTimeout(reconnectTimeout);
+          reconnectTimeout = setTimeout(setupSSE, 5000);
+        }
       }
     };
-    return () => eventSource.close();
+
+    setupSSE();
+
+    // Resilient fallback polling every 3.5 seconds to guarantee sync on Smart TVs & background tabs
+    const pollInterval = setInterval(() => {
+      fetchState();
+    }, 3500);
+
+    return () => {
+      isMounted = false;
+      clearTimeout(reconnectTimeout);
+      clearInterval(pollInterval);
+      if (eventSource) {
+        try { eventSource.close(); } catch {}
+      }
+    };
   }, []);
 
   const dispatchAction = async (type: string, payload: any) => {
@@ -697,7 +746,8 @@ export function ClinicProvider({ children }: { children: React.ReactNode }) {
       updateFollowUpDate, addUser, deleteUser, updateUserEmail, updateUserPassword, addAppointment,
       cancelAppointment, updateSettings,
       updateTemplates,
-      resetDatabase, markShipmentStatus, deleteShipment, nextSequence, sendWhatsAppMessage, approveAppointment 
+      resetDatabase, markShipmentStatus, deleteShipment, nextSequence, sendWhatsAppMessage, approveAppointment,
+      fetchState 
     }}>
       {children}
     </ClinicContext.Provider>
