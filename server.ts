@@ -62,13 +62,18 @@ async function startServer() {
 
   let clients: express.Response[] = [];
   const notifyClients = () => {
-    clients.forEach(client => client.write(`data: update\n\n`));
+    clients.forEach(client => {
+      try {
+        client.write(`data: update\n\n`);
+      } catch (err) {}
+    });
   };
 
   app.get("/api/events", (req, res) => {
     res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
     res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
     res.flushHeaders();
     clients.push(res);
     req.on("close", () => {
@@ -76,7 +81,19 @@ async function startServer() {
     });
   });
 
+  // Keep-alive heartbeat every 20 seconds to prevent reverse proxy (Hostinger/Nginx/Cloudflare) timeouts
+  setInterval(() => {
+    clients.forEach(client => {
+      try {
+        client.write(`: ping\n\n`);
+      } catch (err) {}
+    });
+  }, 20000);
+
   app.get("/api/state", async (req, res) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
     try {
       const dbPatients = await db.select().from(liveQueue).orderBy(asc(liveQueue.sortOrder), asc(liveQueue.checkInTime));
       const dbRegistry = await db.select().from(patientRegistry);
