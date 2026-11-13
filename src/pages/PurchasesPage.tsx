@@ -32,7 +32,15 @@ import {
   ExternalLink,
   ChevronRight,
   PieChart as PieIcon,
-  BarChart3
+  BarChart3,
+  Lock,
+  HardDrive,
+  RefreshCw,
+  FileCheck,
+  CheckSquare,
+  Square,
+  Layers,
+  Image as ImageIcon
 } from 'lucide-react';
 import { Wholesaler, PurchaseInvoice, PurchaseItem, DestinationType, PurchasePaymentStatus } from '../types';
 
@@ -78,11 +86,31 @@ export default function PurchasesPage() {
   const [selectedInvoiceForSlip, setSelectedInvoiceForSlip] = useState<PurchaseInvoice | null>(null);
   const [selectedInvoiceItems, setSelectedInvoiceItems] = useState<PurchaseItem[]>([]);
   const [selectedBillUrl, setSelectedBillUrl] = useState<string | null>(null);
+  const [selectedSlipUrl, setSelectedSlipUrl] = useState<string | null>(null);
   
   // ERP Document Number Modal
   const [erpModalInvoiceId, setErpModalInvoiceId] = useState<string | null>(null);
   const [erpDocInput, setErpDocInput] = useState('');
   const [erpSaving, setErpSaving] = useState(false);
+
+  // Bulk Delete Past Records Modal (Admin & Doctor)
+  const [showBulkDeleteModal, setShowBulkDeleteModal] = useState(false);
+  const [bulkDeleteType, setBulkDeleteType] = useState<'months_older' | 'specific_month' | 'custom_range'>('months_older');
+  const [bulkOlderMonths, setBulkOlderMonths] = useState(3);
+  const [bulkSpecificMonth, setBulkSpecificMonth] = useState('');
+  const [bulkStartDate, setBulkStartDate] = useState('');
+  const [bulkEndDate, setBulkEndDate] = useState('');
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+
+  // Storage & Attached Media Manager Modal (Admin & Doctor)
+  const [showStorageManagerModal, setShowStorageManagerModal] = useState(false);
+  const [selectedMediaToDelete, setSelectedMediaToDelete] = useState<string[]>([]);
+  const [storageDeleting, setStorageDeleting] = useState(false);
+
+  // Wholesaler Directory Custom Date Period State
+  const [wsDateInterval, setWsDateInterval] = useState<'all' | 'today' | 'this_week' | 'this_month' | 'last_month' | 'last_30_days' | 'fy' | 'custom'>('this_month');
+  const [wsCustomStart, setWsCustomStart] = useState('');
+  const [wsCustomEnd, setWsCustomEnd] = useState('');
 
   // New Wholesaler Modal
   const [showWholesalerModal, setShowWholesalerModal] = useState(false);
@@ -375,13 +403,20 @@ export default function PurchasesPage() {
     }
   };
 
-  // 1-Click Paid / Unpaid Toggle
+  // 1-Click Paid / Unpaid Toggle (Admin and Doctor only)
   const handleTogglePayment = async (inv: PurchaseInvoice) => {
+    if (!isAdminOrDoctor) {
+      alert('Only Admin and Doctor are authorized to mark bills Paid or Unpaid.');
+      return;
+    }
     const nextStatus = inv.paymentStatus === 'Paid' ? 'Unpaid' : 'Paid';
     try {
       const res = await fetch(`/api/purchases/${inv.id}/payment`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-user-role': userRole
+        },
         body: JSON.stringify({
           paymentStatus: nextStatus,
           paidAmount: nextStatus === 'Paid' ? inv.totalAmount : 0,
@@ -392,7 +427,10 @@ export default function PurchasesPage() {
       if (res.ok) {
         setInvoices(prev => prev.map(item => item.id === inv.id ? { ...item, paymentStatus: nextStatus } : item));
         // Refresh analytics in background
-        fetch('/api/purchases/analytics').then(r => r.json()).then(data => setAnalytics(data)).catch(() => {});
+        fetch('/api/purchases/analytics', { headers: { 'x-user-role': userRole } }).then(r => r.json()).then(data => setAnalytics(data)).catch(() => {});
+      } else {
+        const d = await res.json();
+        alert(d.error || 'Failed to update payment status.');
       }
     } catch (err) {
       console.error('Failed to toggle payment:', err);
@@ -437,13 +475,13 @@ export default function PurchasesPage() {
     }
   };
 
-  // Delete Invoice (Admin/Doctor Only)
+  // Delete Invoice (Admin/Doctor Only - removes DB records and all attached files from disk)
   const handleDeleteInvoice = async (id: string, invoiceNumber: string) => {
     if (!isAdminOrDoctor) {
       alert('Only Admin and Doctor are authorized to delete invoices.');
       return;
     }
-    if (!window.confirm(`Are you sure you want to permanently delete Invoice #${invoiceNumber}?`)) {
+    if (!window.confirm(`Are you sure you want to permanently delete Invoice #${invoiceNumber}? All attached bill and handwritten slip files will also be removed from disk.`)) {
       return;
     }
 
@@ -461,6 +499,133 @@ export default function PurchasesPage() {
       }
     } catch (err: any) {
       alert('Delete error: ' + err.message);
+    }
+  };
+
+  // Delete Wholesaler (Admin/Doctor Only)
+  const handleDeleteWholesaler = async (id: string, name: string) => {
+    if (!isAdminOrDoctor) {
+      alert('Only Admin and Doctor are authorized to delete wholesalers.');
+      return;
+    }
+    const relatedCount = invoices.filter(inv => inv.wholesalerId === id).length;
+    let msg = `Are you sure you want to permanently delete wholesaler "${name}"?`;
+    if (relatedCount > 0) {
+      msg += `\n\nNotice: There are ${relatedCount} past invoice(s) associated with this wholesaler. The supplier directory entry will be deleted.`;
+    }
+    if (!window.confirm(msg)) return;
+
+    try {
+      const res = await fetch(`/api/wholesalers/${id}`, {
+        method: 'DELETE',
+        headers: { 'x-user-role': userRole }
+      });
+      if (res.ok) {
+        setWholesalers(prev => prev.filter(w => w.id !== id));
+        fetchData();
+      } else {
+        const d = await res.json();
+        alert(d.error || 'Failed to delete wholesaler.');
+      }
+    } catch (err: any) {
+      alert('Error deleting wholesaler: ' + err.message);
+    }
+  };
+
+  // Bulk Delete Past Records (Admin & Doctor Only)
+  const handleExecuteBulkDelete = async () => {
+    if (!isAdminOrDoctor) {
+      alert('Only Admin and Doctor can bulk delete past purchase records.');
+      return;
+    }
+    const count = bulkDeleteMatchingInvoices.length;
+    if (count === 0) {
+      alert('No matching invoices found for the selected criteria.');
+      return;
+    }
+
+    if (!window.confirm(`CAUTION: You are about to PERMANENTLY delete ${count} purchase invoices and all their attached images/files from disk.\n\nThis action cannot be undone. Do you wish to proceed?`)) {
+      return;
+    }
+
+    setBulkDeleting(true);
+    try {
+      const res = await fetch('/api/purchases/bulk-delete', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-role': userRole
+        },
+        body: JSON.stringify({
+          specificMonth: bulkDeleteType === 'specific_month' ? bulkSpecificMonth : undefined,
+          monthsOlderThan: bulkDeleteType === 'months_older' ? bulkOlderMonths : undefined,
+          startDate: bulkDeleteType === 'custom_range' ? bulkStartDate : undefined,
+          endDate: bulkDeleteType === 'custom_range' ? bulkEndDate : undefined
+        })
+      });
+
+      const d = await res.json();
+      setBulkDeleting(false);
+      if (res.ok && d.success) {
+        alert(`Successfully deleted ${d.count} invoices and all related files from disk.`);
+        setShowBulkDeleteModal(false);
+        fetchData();
+      } else {
+        alert(d.error || 'Failed to bulk delete records.');
+      }
+    } catch (err: any) {
+      setBulkDeleting(false);
+      alert('Bulk delete error: ' + err.message);
+    }
+  };
+
+  // Bulk Delete Saved Bill / Slip Attachments to save storage (Admin & Doctor Only)
+  const handleDeleteSelectedAttachments = async () => {
+    if (!isAdminOrDoctor) {
+      alert('Only Admin and Doctor can delete attached media.');
+      return;
+    }
+    if (selectedMediaToDelete.length === 0) {
+      alert('Please select at least one attachment to delete.');
+      return;
+    }
+
+    if (!window.confirm(`Are you sure you want to permanently delete ${selectedMediaToDelete.length} attached image(s) from server storage to free disk space? The invoice records will remain intact.`)) {
+      return;
+    }
+
+    setStorageDeleting(true);
+    try {
+      const payload = selectedMediaToDelete.map(id => {
+        const item = allSavedMedia.find(m => m.id === id);
+        return {
+          invoiceId: item?.invoiceId,
+          type: item?.type,
+          fileUrl: item?.fileUrl
+        };
+      }).filter(p => p.fileUrl);
+
+      const res = await fetch('/api/purchases/delete-attachments', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-role': userRole
+        },
+        body: JSON.stringify({ attachments: payload })
+      });
+
+      const d = await res.json();
+      setStorageDeleting(false);
+      if (res.ok && d.success) {
+        alert(`Successfully deleted ${d.count} file(s) from disk and cleared attachment links.`);
+        setSelectedMediaToDelete([]);
+        fetchData();
+      } else {
+        alert(d.error || 'Failed to delete media files.');
+      }
+    } catch (err: any) {
+      setStorageDeleting(false);
+      alert('Media deletion error: ' + err.message);
     }
   };
 
@@ -668,6 +833,144 @@ export default function PurchasesPage() {
     }
     return analytics || computedAnalytics;
   }, [invoices.length, effectiveStartDate, effectiveEndDate, computedAnalytics, analytics]);
+
+  // All saved bill images & handwritten slips across invoices for Storage Manager
+  const allSavedMedia = useMemo(() => {
+    const list: Array<{ id: string; invoiceId: string; invoiceNumber: string; wholesalerName: string; invoiceDate: string; type: 'bill' | 'slip'; fileUrl: string }> = [];
+    invoices.forEach(inv => {
+      if (inv.originalBillUrl) {
+        list.push({
+          id: `${inv.id}_bill`,
+          invoiceId: inv.id,
+          invoiceNumber: inv.invoiceNumber,
+          wholesalerName: inv.wholesalerName,
+          invoiceDate: inv.invoiceDate,
+          type: 'bill',
+          fileUrl: inv.originalBillUrl
+        });
+      }
+      if (inv.handwrittenSlipUrl) {
+        list.push({
+          id: `${inv.id}_slip`,
+          invoiceId: inv.id,
+          invoiceNumber: inv.invoiceNumber,
+          wholesalerName: inv.wholesalerName,
+          invoiceDate: inv.invoiceDate,
+          type: 'slip',
+          fileUrl: inv.handwrittenSlipUrl
+        });
+      }
+    });
+    return list;
+  }, [invoices]);
+
+  // Invoices matching the bulk deletion criteria
+  const bulkDeleteMatchingInvoices = useMemo(() => {
+    if (bulkDeleteType === 'specific_month') {
+      if (!bulkSpecificMonth) return [];
+      return invoices.filter(inv => inv.invoiceDate && inv.invoiceDate.startsWith(bulkSpecificMonth));
+    }
+    if (bulkDeleteType === 'months_older') {
+      const d = new Date();
+      d.setMonth(d.getMonth() - Number(bulkOlderMonths));
+      const cutoff = d.toISOString().substring(0, 10);
+      return invoices.filter(inv => inv.invoiceDate && inv.invoiceDate < cutoff);
+    }
+    if (bulkDeleteType === 'custom_range') {
+      return invoices.filter(inv => {
+        const d = inv.invoiceDate || '';
+        if (bulkStartDate && d < bulkStartDate) return false;
+        if (bulkEndDate && d > bulkEndDate) return false;
+        return true;
+      });
+    }
+    return [];
+  }, [invoices, bulkDeleteType, bulkOlderMonths, bulkSpecificMonth, bulkStartDate, bulkEndDate]);
+
+  // Wholesaler Directory Date Interval Boundaries
+  const { wsEffectiveStart, wsEffectiveEnd, wsIntervalLabel } = useMemo(() => {
+    const today = new Date();
+    const pad = (n: number) => n.toString().padStart(2, '0');
+    const toYMD = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
+    if (wsDateInterval === 'today') {
+      const d = toYMD(today);
+      return { wsEffectiveStart: d, wsEffectiveEnd: d, wsIntervalLabel: `Today (${d})` };
+    }
+    if (wsDateInterval === 'this_week') {
+      const curr = new Date(today);
+      const day = curr.getDay();
+      const diff = curr.getDate() - day + (day === 0 ? -6 : 1);
+      const mon = new Date(curr.setDate(diff));
+      return { wsEffectiveStart: toYMD(mon), wsEffectiveEnd: toYMD(today), wsIntervalLabel: 'This Week' };
+    }
+    if (wsDateInterval === 'this_month') {
+      const start = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-01`;
+      return { wsEffectiveStart: start, wsEffectiveEnd: toYMD(today), wsIntervalLabel: `This Month (${today.toLocaleString('default', { month: 'short', year: 'numeric' })})` };
+    }
+    if (wsDateInterval === 'last_month') {
+      const prev = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+      const lastDay = new Date(today.getFullYear(), today.getMonth(), 0);
+      return { wsEffectiveStart: toYMD(prev), wsEffectiveEnd: toYMD(lastDay), wsIntervalLabel: `Last Month (${prev.toLocaleString('default', { month: 'short', year: 'numeric' })})` };
+    }
+    if (wsDateInterval === 'last_30_days') {
+      const d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      return { wsEffectiveStart: toYMD(d), wsEffectiveEnd: toYMD(today), wsIntervalLabel: 'Last 30 Days' };
+    }
+    if (wsDateInterval === 'fy') {
+      const year = today.getMonth() >= 3 ? today.getFullYear() : today.getFullYear() - 1;
+      const start = `${year}-04-01`;
+      const end = `${year + 1}-03-31`;
+      return { wsEffectiveStart: start, wsEffectiveEnd: end, wsIntervalLabel: `This Year (FY ${year}-${year + 1})` };
+    }
+    if (wsDateInterval === 'custom') {
+      return { 
+        wsEffectiveStart: wsCustomStart, 
+        wsEffectiveEnd: wsCustomEnd, 
+        wsIntervalLabel: (wsCustomStart || wsCustomEnd) ? `${wsCustomStart || 'Start'} to ${wsCustomEnd || 'Present'}` : 'Custom Range' 
+      };
+    }
+    return { wsEffectiveStart: '', wsEffectiveEnd: '', wsIntervalLabel: 'All-Time' };
+  }, [wsDateInterval, wsCustomStart, wsCustomEnd]);
+
+  // Wholesaler stats calculation across selected time period
+  const wholesalerStats = useMemo(() => {
+    const stats: Record<string, { totalPurchase: number; totalPaid: number; balanceRemaining: number; billCount: number; allTimeBalance: number }> = {};
+    
+    wholesalers.forEach(w => {
+      stats[w.id] = { totalPurchase: 0, totalPaid: 0, balanceRemaining: 0, billCount: 0, allTimeBalance: 0 };
+    });
+
+    invoices.forEach(inv => {
+      const wId = inv.wholesalerId;
+      if (!wId) return;
+      if (!stats[wId]) {
+        stats[wId] = { totalPurchase: 0, totalPaid: 0, balanceRemaining: 0, billCount: 0, allTimeBalance: 0 };
+      }
+
+      const amt = Number(inv.totalAmount || 0);
+      const paid = inv.paymentStatus === 'Paid' ? (Number(inv.paidAmount) || amt) : 0;
+      const unpaid = amt - paid;
+
+      // All-time pending dues
+      stats[wId].allTimeBalance += Math.max(0, unpaid);
+
+      // Period filter
+      const invDate = inv.invoiceDate || '';
+      let matches = true;
+      if (wsEffectiveStart && invDate < wsEffectiveStart) matches = false;
+      if (wsEffectiveEnd && invDate > wsEffectiveEnd) matches = false;
+
+      if (matches) {
+        stats[wId].totalPurchase += amt;
+        stats[wId].totalPaid += paid;
+        stats[wId].balanceRemaining += Math.max(0, unpaid);
+        stats[wId].billCount += 1;
+      }
+    });
+
+    return stats;
+  }, [wholesalers, invoices, wsEffectiveStart, wsEffectiveEnd]);
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans flex flex-col">
@@ -1166,6 +1469,28 @@ export default function PurchasesPage() {
                   </div>
                 )}
 
+                {isAdminOrDoctor && (
+                  <button
+                    onClick={() => setShowBulkDeleteModal(true)}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-semibold text-xs shadow-sm transition-all"
+                    title="Bulk Delete Past Records by Custom Months"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Clean Past Records
+                  </button>
+                )}
+
+                {isAdminOrDoctor && (
+                  <button
+                    onClick={() => setShowStorageManagerModal(true)}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 font-semibold text-xs shadow-sm transition-all"
+                    title="View Saved Bills & Slips and Free Storage"
+                  >
+                    <HardDrive className="w-3.5 h-3.5" />
+                    Storage ({allSavedMedia.length})
+                  </button>
+                )}
+
                 <button
                   onClick={() => setActiveTab('new-entry')}
                   className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-semibold text-xs shadow-sm transition-all"
@@ -1253,6 +1578,18 @@ export default function PurchasesPage() {
                                 <Calendar className="w-3 h-3 text-slate-400" />
                                 {inv.invoiceDate}
                               </div>
+                              <div className="flex items-center gap-1 mt-1">
+                                {inv.originalBillUrl && (
+                                  <span className="text-[10px] font-semibold text-teal-700 bg-teal-50 px-1.5 py-0.5 rounded border border-teal-200">
+                                    Bill
+                                  </span>
+                                )}
+                                {inv.handwrittenSlipUrl && (
+                                  <span className="text-[10px] font-semibold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
+                                    Slip
+                                  </span>
+                                )}
+                              </div>
                             </td>
 
                             {/* Wholesaler */}
@@ -1294,30 +1631,44 @@ export default function PurchasesPage() {
                               )}
                             </td>
 
-                            {/* 1-Click Paid/Unpaid Toggle */}
+                            {/* 1-Click Paid/Unpaid Toggle (Active for Admin & Doctor, read-only with Lock for Staff) */}
                             <td className="py-3.5 px-4 text-center">
-                              <button
-                                type="button"
-                                onClick={() => handleTogglePayment(inv)}
-                                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold transition-all shadow-sm ${
-                                  isPaid
-                                    ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                                    : 'bg-rose-100 hover:bg-rose-200 text-rose-700 border border-rose-300'
-                                }`}
-                                title="Click to toggle Paid / Unpaid status"
-                              >
-                                {isPaid ? (
-                                  <>
-                                    <Check className="w-3 h-3 stroke-[3]" />
-                                    <span>PAID</span>
-                                  </>
-                                ) : (
-                                  <>
-                                    <Clock className="w-3 h-3" />
-                                    <span>UNPAID</span>
-                                  </>
-                                )}
-                              </button>
+                              {isAdminOrDoctor ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleTogglePayment(inv)}
+                                  className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold transition-all shadow-sm ${
+                                    isPaid
+                                      ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                                      : 'bg-rose-100 hover:bg-rose-200 text-rose-700 border border-rose-300'
+                                  }`}
+                                  title="Click to toggle Paid / Unpaid status (Admin & Doctor only)"
+                                >
+                                  {isPaid ? (
+                                    <>
+                                      <Check className="w-3 h-3 stroke-[3]" />
+                                      <span>PAID</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Clock className="w-3 h-3" />
+                                      <span>UNPAID</span>
+                                    </>
+                                  )}
+                                </button>
+                              ) : (
+                                <span
+                                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold opacity-80 cursor-not-allowed ${
+                                    isPaid
+                                      ? 'bg-emerald-100 text-emerald-800'
+                                      : 'bg-rose-100 text-rose-800'
+                                  }`}
+                                  title="Only Admin & Doctor can mark Paid/Unpaid"
+                                >
+                                  <Lock className="w-3 h-3" />
+                                  <span>{isPaid ? 'PAID' : 'UNPAID'}</span>
+                                </span>
+                              )}
                               {isPaid && inv.paidDate && (
                                 <div className="text-[10px] text-slate-400 mt-1">{inv.paidDate}</div>
                               )}
@@ -1360,10 +1711,11 @@ export default function PurchasesPage() {
                                 {(isSplit || isStore) && (
                                   <button
                                     onClick={() => handleOpenTransferSlip(inv)}
-                                    className="p-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 transition-colors"
+                                    className="p-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 transition-colors flex items-center gap-1 text-xs"
                                     title="View & Print Store Transfer Slip"
                                   >
                                     <Printer className="w-4 h-4" />
+                                    <span className="hidden xl:inline text-[11px] font-semibold">Slip</span>
                                   </button>
                                 )}
 
@@ -1371,10 +1723,23 @@ export default function PurchasesPage() {
                                 {inv.originalBillUrl && (
                                   <button
                                     onClick={() => setSelectedBillUrl(inv.originalBillUrl || null)}
-                                    className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors"
+                                    className="p-1.5 rounded-lg bg-teal-50 hover:bg-teal-100 text-teal-700 transition-colors flex items-center gap-1 text-xs"
                                     title="View Original Wholesaler Bill"
                                   >
                                     <Eye className="w-4 h-4" />
+                                    <span className="hidden xl:inline text-[11px] font-semibold">Bill</span>
+                                  </button>
+                                )}
+
+                                {/* View Attached Handwritten Slip (Requirement 6) */}
+                                {inv.handwrittenSlipUrl && (
+                                  <button
+                                    onClick={() => setSelectedSlipUrl(inv.handwrittenSlipUrl || null)}
+                                    className="p-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-700 transition-colors flex items-center gap-1 text-xs"
+                                    title="View Attached Handwritten Slip"
+                                  >
+                                    <FileText className="w-4 h-4" />
+                                    <span className="hidden xl:inline text-[11px] font-semibold">Note</span>
                                   </button>
                                 )}
 
@@ -1383,7 +1748,7 @@ export default function PurchasesPage() {
                                   <button
                                     onClick={() => handleDeleteInvoice(inv.id, inv.invoiceNumber)}
                                     className="p-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 transition-colors"
-                                    title="Delete invoice (Admin only)"
+                                    title="Delete invoice and all attached files (Admin only)"
                                   >
                                     <Trash2 className="w-4 h-4" />
                                   </button>
@@ -1737,10 +2102,40 @@ export default function PurchasesPage() {
                   <p className="text-[11px] text-slate-400 mb-2">Photo or PDF (Max 25MB)</p>
                   
                   {newInvoice.originalBillUrl ? (
-                    <span className="text-xs font-semibold text-emerald-600 flex items-center gap-1">
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      Bill Attached
-                    </span>
+                    <div className="flex flex-col items-center gap-2">
+                      <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                        <span>Bill Attached</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedBillUrl(newInvoice.originalBillUrl)}
+                          className="px-2.5 py-1 text-xs font-medium rounded-lg bg-teal-50 hover:bg-teal-100 text-teal-700 transition-colors"
+                        >
+                          View Bill
+                        </button>
+                        <label className="cursor-pointer px-2.5 py-1 text-xs font-medium rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors flex items-center gap-1">
+                          <RefreshCw className="w-3 h-3 text-slate-500" />
+                          <span>{uploadingBill ? 'Replacing...' : 'Replace'}</span>
+                          <input
+                            type="file"
+                            accept="image/*,application/pdf"
+                            disabled={uploadingBill}
+                            onChange={e => e.target.files?.[0] && handleFileUpload(e.target.files[0], 'bill')}
+                            className="hidden"
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => setNewInvoice(prev => ({ ...prev, originalBillUrl: '' }))}
+                          className="p-1 text-rose-500 hover:bg-rose-50 rounded-lg transition-colors"
+                          title="Remove attached bill"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
                   ) : (
                     <label className="cursor-pointer text-xs font-semibold px-3 py-1.5 bg-white border border-slate-300 hover:bg-slate-100 rounded-lg transition-colors">
                       {uploadingBill ? 'Uploading...' : 'Choose File'}
@@ -1761,10 +2156,40 @@ export default function PurchasesPage() {
                   <p className="text-[11px] text-slate-400 mb-2">Store segregation note or handwritten slip</p>
                   
                   {newInvoice.handwrittenSlipUrl ? (
-                    <span className="text-xs font-semibold text-emerald-600 flex items-center gap-1">
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      Slip Attached
-                    </span>
+                    <div className="flex flex-col items-center gap-2">
+                      <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-700 bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200">
+                        <CheckCircle2 className="w-4 h-4 text-amber-600" />
+                        <span>Slip Attached</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedSlipUrl(newInvoice.handwrittenSlipUrl)}
+                          className="px-2.5 py-1 text-xs font-medium rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 transition-colors"
+                        >
+                          View Slip
+                        </button>
+                        <label className="cursor-pointer px-2.5 py-1 text-xs font-medium rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors flex items-center gap-1">
+                          <RefreshCw className="w-3 h-3 text-slate-500" />
+                          <span>{uploadingSlip ? 'Replacing...' : 'Replace'}</span>
+                          <input
+                            type="file"
+                            accept="image/*,application/pdf"
+                            disabled={uploadingSlip}
+                            onChange={e => e.target.files?.[0] && handleFileUpload(e.target.files[0], 'slip')}
+                            className="hidden"
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => setNewInvoice(prev => ({ ...prev, handwrittenSlipUrl: '' }))}
+                          className="p-1 text-rose-500 hover:bg-rose-50 rounded-lg transition-colors"
+                          title="Remove attached slip"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
                   ) : (
                     <label className="cursor-pointer text-xs font-semibold px-3 py-1.5 bg-white border border-slate-300 hover:bg-slate-100 rounded-lg transition-colors">
                       {uploadingSlip ? 'Uploading...' : 'Choose File'}
@@ -1803,64 +2228,261 @@ export default function PurchasesPage() {
         )}
 
         {/* ========================================================================= */}
-        {/* TAB 4: WHOLESALER DIRECTORY                                              */}
+        {/* TAB 4: WHOLESALER DIRECTORY & BALANCE TRACKING                            */}
         {/* ========================================================================= */}
         {activeTab === 'wholesalers' && (
-          <div className="space-y-4">
+          <div className="space-y-6">
             
-            <div className="flex items-center justify-between">
+            {/* Header & Add Button */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
-                <h2 className="text-lg font-bold text-slate-900">Wholesaler Directory</h2>
-                <p className="text-xs text-slate-500">Manage medicine suppliers across cities</p>
+                <h2 className="text-xl font-bold text-slate-900">Wholesaler Directory & Supplier Dues</h2>
+                <p className="text-xs text-slate-500">Live ledger of purchases, balance remaining (pending dues), and supplier contacts</p>
               </div>
               <button
                 onClick={() => setShowWholesalerModal(true)}
-                className="px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-semibold text-xs flex items-center gap-1.5 shadow-sm transition-colors"
+                className="px-4 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-semibold text-xs flex items-center justify-center gap-1.5 shadow-sm transition-colors"
               >
-                <Plus className="w-3.5 h-3.5" />
-                Add Wholesaler
+                <Plus className="w-4 h-4" />
+                Add New Wholesaler
               </button>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {wholesalers.map(w => (
-                <div key={w.id} className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm flex flex-col justify-between">
-                  <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-xs font-semibold px-2 py-0.5 rounded bg-teal-50 text-teal-700 border border-teal-200">
-                        {w.city}
-                      </span>
-                      {w.gstNumber && (
-                        <span className="text-[10px] font-mono text-slate-400">GST: {w.gstNumber}</span>
-                      )}
-                    </div>
-                    <h3 className="font-bold text-slate-900 text-base">{w.name}</h3>
-                    {w.contactPerson && (
-                      <p className="text-xs text-slate-600 mt-1">Contact: {w.contactPerson}</p>
-                    )}
-                  </div>
+            {/* Time Period Filter Toolbar */}
+            <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-sm space-y-3">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <Calendar className="w-4 h-4 text-teal-600 shrink-0" />
+                  <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">Time Period for Balance & Purchases:</span>
+                  <span className="text-xs font-semibold px-2 py-0.5 rounded-md bg-teal-50 text-teal-700 border border-teal-200">
+                    {wsIntervalLabel}
+                  </span>
+                </div>
 
-                  <div className="mt-4 pt-3 border-t border-slate-100 space-y-1 text-xs text-slate-500">
-                    {w.phone && (
-                      <div className="flex items-center gap-1.5">
-                        <Phone className="w-3 h-3 text-slate-400" />
-                        <span>{w.phone}</span>
-                      </div>
-                    )}
-                    {w.email && (
-                      <div className="flex items-center gap-1.5">
-                        <Mail className="w-3 h-3 text-slate-400" />
-                        <span>{w.email}</span>
-                      </div>
-                    )}
-                    {w.paymentTerms && (
-                      <div className="text-[11px] text-slate-400 font-medium mt-1">
-                        Terms: {w.paymentTerms}
-                      </div>
-                    )}
+                {/* Preset intervals */}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    onClick={() => setWsDateInterval('this_month')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                      wsDateInterval === 'this_month'
+                        ? 'bg-teal-600 text-white shadow-sm'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    This Month
+                  </button>
+                  <button
+                    onClick={() => setWsDateInterval('last_month')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                      wsDateInterval === 'last_month'
+                        ? 'bg-teal-600 text-white shadow-sm'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    Last Month
+                  </button>
+                  <button
+                    onClick={() => setWsDateInterval('fy')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                      wsDateInterval === 'fy'
+                        ? 'bg-teal-600 text-white shadow-sm'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    This Year (FY)
+                  </button>
+                  <button
+                    onClick={() => setWsDateInterval('all')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                      wsDateInterval === 'all'
+                        ? 'bg-teal-600 text-white shadow-sm'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    All-Time
+                  </button>
+                  <button
+                    onClick={() => setWsDateInterval('custom')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                      wsDateInterval === 'custom'
+                        ? 'bg-teal-600 text-white shadow-sm'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    Custom Range
+                  </button>
+                </div>
+              </div>
+
+              {/* Custom Date Pickers */}
+              {wsDateInterval === 'custom' && (
+                <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center gap-3">
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="font-semibold text-slate-600">From:</span>
+                    <input
+                      type="date"
+                      value={wsCustomStart}
+                      onChange={e => setWsCustomStart(e.target.value)}
+                      className="py-1 px-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium focus:ring-2 focus:ring-teal-500 focus:outline-none"
+                    />
+                  </div>
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="font-semibold text-slate-600">To:</span>
+                    <input
+                      type="date"
+                      value={wsCustomEnd}
+                      onChange={e => setWsCustomEnd(e.target.value)}
+                      className="py-1 px-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium focus:ring-2 focus:ring-teal-500 focus:outline-none"
+                    />
                   </div>
                 </div>
-              ))}
+              )}
+            </div>
+
+            {/* Overall Wholesaler KPI Summary Cards for selected period */}
+            {(() => {
+              const totalPeriodPurchases = Object.values(wholesalerStats).reduce((s, st) => s + st.totalPurchase, 0);
+              const totalPeriodBalance = Object.values(wholesalerStats).reduce((s, st) => s + st.balanceRemaining, 0);
+              const totalAllTimeBalance = Object.values(wholesalerStats).reduce((s, st) => s + st.allTimeBalance, 0);
+              return (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                  <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+                    <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
+                      Period Purchases ({wsIntervalLabel})
+                    </span>
+                    <span className="text-xl font-black text-slate-900 mt-1 block">
+                      ₹{totalPeriodPurchases.toLocaleString('en-IN')}
+                    </span>
+                  </div>
+
+                  <div className="bg-white p-4 rounded-2xl border border-amber-200 bg-amber-50/20 shadow-sm">
+                    <span className="text-[11px] font-bold text-amber-700 uppercase tracking-wider block">
+                      Period Balance Remaining (Dues)
+                    </span>
+                    <span className="text-xl font-black text-amber-700 mt-1 block">
+                      ₹{totalPeriodBalance.toLocaleString('en-IN')}
+                    </span>
+                  </div>
+
+                  <div className="bg-white p-4 rounded-2xl border border-rose-200 bg-rose-50/20 shadow-sm">
+                    <span className="text-[11px] font-bold text-rose-700 uppercase tracking-wider block">
+                      All-Time Pending Dues
+                    </span>
+                    <span className="text-xl font-black text-rose-700 mt-1 block">
+                      ₹{totalAllTimeBalance.toLocaleString('en-IN')}
+                    </span>
+                  </div>
+
+                  <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+                    <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
+                      Total Active Wholesalers
+                    </span>
+                    <span className="text-xl font-black text-teal-700 mt-1 block">
+                      {wholesalers.length} Suppliers
+                    </span>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Wholesaler Cards Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+              {wholesalers.map(w => {
+                const stats = wholesalerStats[w.id] || { totalPurchase: 0, totalPaid: 0, balanceRemaining: 0, billCount: 0, allTimeBalance: 0 };
+                return (
+                  <div key={w.id} className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm flex flex-col justify-between hover:shadow-md transition-shadow">
+                    <div>
+                      {/* Top Badges */}
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-teal-50 text-teal-700 border border-teal-200">
+                          {w.city}
+                        </span>
+                        {w.gstNumber && (
+                          <span className="text-[10px] font-mono text-slate-400 bg-slate-50 px-2 py-0.5 rounded border border-slate-100">
+                            GST: {w.gstNumber}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Wholesaler Name & Contact */}
+                      <h3 className="font-bold text-slate-900 text-lg leading-snug">{w.name}</h3>
+                      {w.contactPerson && (
+                        <p className="text-xs text-slate-600 mt-1 flex items-center gap-1">
+                          <User className="w-3 h-3 text-slate-400" />
+                          <span>{w.contactPerson}</span>
+                        </p>
+                      )}
+
+                      {/* Period Financial Metrics */}
+                      <div className="mt-4 p-3 bg-slate-50 rounded-xl border border-slate-200/80 space-y-2">
+                        <div className="flex justify-between items-center text-xs">
+                          <span className="text-slate-500 font-medium">Purchases ({wsIntervalLabel}):</span>
+                          <span className="font-extrabold text-slate-900">
+                            ₹{stats.totalPurchase.toLocaleString('en-IN')}
+                            <span className="text-[10px] font-normal text-slate-500 ml-1">({stats.billCount} bills)</span>
+                          </span>
+                        </div>
+
+                        <div className="flex justify-between items-center text-xs">
+                          <span className="text-slate-500 font-medium">Balance Remaining:</span>
+                          {stats.balanceRemaining > 0 ? (
+                            <span className="font-black text-rose-600 bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
+                              ₹{stats.balanceRemaining.toLocaleString('en-IN')} Due
+                            </span>
+                          ) : (
+                            <span className="font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                              Cleared (₹0)
+                            </span>
+                          )}
+                        </div>
+
+                        {stats.allTimeBalance > 0 && (
+                          <div className="flex justify-between items-center text-[11px] pt-1.5 border-t border-slate-200">
+                            <span className="text-slate-400 font-medium">Lifetime Dues:</span>
+                            <span className="font-bold text-amber-700">₹{stats.allTimeBalance.toLocaleString('en-IN')}</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Contact details & Action Footer */}
+                    <div className="mt-4 pt-3 border-t border-slate-100 space-y-1.5 text-xs text-slate-500">
+                      {w.phone && (
+                        <div className="flex items-center gap-1.5">
+                          <Phone className="w-3.5 h-3.5 text-slate-400" />
+                          <a href={`tel:${w.phone}`} className="hover:text-teal-600 transition-colors">{w.phone}</a>
+                        </div>
+                      )}
+                      {w.email && (
+                        <div className="flex items-center gap-1.5">
+                          <Mail className="w-3.5 h-3.5 text-slate-400" />
+                          <a href={`mailto:${w.email}`} className="hover:text-teal-600 transition-colors truncate">{w.email}</a>
+                        </div>
+                      )}
+                      {w.paymentTerms && (
+                        <div className="text-[11px] text-slate-400 font-medium">
+                          Terms: <span className="text-slate-600">{w.paymentTerms}</span>
+                        </div>
+                      )}
+
+                      {/* Delete Wholesaler (Admin/Doctor only) */}
+                      {isAdminOrDoctor && (
+                        <div className="pt-2 flex justify-end">
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteWholesaler(w.id, w.name)}
+                            className="px-2.5 py-1 text-xs text-rose-600 hover:text-rose-700 hover:bg-rose-50 rounded-lg transition-colors flex items-center gap-1 font-semibold"
+                            title="Delete wholesaler from directory"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            Delete Wholesaler
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
 
           </div>
@@ -2163,6 +2785,392 @@ export default function PurchasesPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL 5: VIEW ATTACHED HANDWRITTEN SLIP                                   */}
+      {/* ========================================================================= */}
+      {selectedSlipUrl && (
+        <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-3xl w-full p-4 shadow-2xl border border-slate-200 max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-200 mb-3">
+              <div className="flex items-center gap-2">
+                <FileText className="w-5 h-5 text-amber-600" />
+                <span className="font-bold text-sm text-slate-800">Attached Handwritten Slip / Segregation Note</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <a
+                  href={selectedSlipUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors"
+                >
+                  Open in New Tab
+                </a>
+                <button
+                  onClick={() => setSelectedSlipUrl(null)}
+                  className="p-1 text-slate-400 hover:text-slate-600 rounded-lg"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-auto flex items-center justify-center p-2 bg-slate-100 rounded-xl">
+              {selectedSlipUrl.toLowerCase().endsWith('.pdf') ? (
+                <iframe src={selectedSlipUrl} className="w-full h-[600px] rounded-lg" title="Handwritten Slip PDF" />
+              ) : (
+                <img src={selectedSlipUrl} alt="Handwritten Slip Preview" className="max-w-full max-h-[600px] object-contain rounded-lg shadow-sm" />
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL 6: BULK DELETE PAST RECORDS (Admin & Doctor Only)                    */}
+      {/* ========================================================================= */}
+      {showBulkDeleteModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-200 mb-4">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center">
+                  <Trash2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 text-base">Bulk Delete Past Records</h3>
+                  <p className="text-xs text-slate-500">Purge older invoices and clean up server storage</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowBulkDeleteModal(false)}
+                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4 text-xs">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1.5">Select Deletion Criteria:</label>
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setBulkDeleteType('months_older')}
+                    className={`py-2 px-2 rounded-xl border text-center font-semibold transition-all ${
+                      bulkDeleteType === 'months_older'
+                        ? 'bg-rose-50 border-rose-400 text-rose-800'
+                        : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    Older Than X Mos
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBulkDeleteType('specific_month')}
+                    className={`py-2 px-2 rounded-xl border text-center font-semibold transition-all ${
+                      bulkDeleteType === 'specific_month'
+                        ? 'bg-rose-50 border-rose-400 text-rose-800'
+                        : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    Specific Month
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBulkDeleteType('custom_range')}
+                    className={`py-2 px-2 rounded-xl border text-center font-semibold transition-all ${
+                      bulkDeleteType === 'custom_range'
+                        ? 'bg-rose-50 border-rose-400 text-rose-800'
+                        : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    Custom Dates
+                  </button>
+                </div>
+              </div>
+
+              {bulkDeleteType === 'months_older' && (
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Delete Invoices Older Than:</label>
+                  <select
+                    value={bulkOlderMonths}
+                    onChange={e => setBulkOlderMonths(Number(e.target.value))}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-medium focus:ring-2 focus:ring-rose-500 focus:outline-none"
+                  >
+                    <option value={1}>Older than 1 Month (Previous month & older)</option>
+                    <option value={2}>Older than 2 Months</option>
+                    <option value={3}>Older than 3 Months (Quarterly purge)</option>
+                    <option value={6}>Older than 6 Months</option>
+                    <option value={12}>Older than 1 Year (12 Months)</option>
+                    <option value={24}>Older than 2 Years</option>
+                  </select>
+                </div>
+              )}
+
+              {bulkDeleteType === 'specific_month' && (
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Pick Specific Month:</label>
+                  <input
+                    type="month"
+                    value={bulkSpecificMonth}
+                    onChange={e => setBulkSpecificMonth(e.target.value)}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-medium focus:ring-2 focus:ring-rose-500 focus:outline-none"
+                  />
+                </div>
+              )}
+
+              {bulkDeleteType === 'custom_range' && (
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">From Date:</label>
+                    <input
+                      type="date"
+                      value={bulkStartDate}
+                      onChange={e => setBulkStartDate(e.target.value)}
+                      className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-medium focus:ring-2 focus:ring-rose-500 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">To Date:</label>
+                    <input
+                      type="date"
+                      value={bulkEndDate}
+                      onChange={e => setBulkEndDate(e.target.value)}
+                      className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-medium focus:ring-2 focus:ring-rose-500 focus:outline-none"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Match Counter & Impact Preview */}
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5">
+                <div className="flex justify-between items-center text-xs">
+                  <span className="text-slate-500 font-medium">Matching Invoices Found:</span>
+                  <span className="font-bold text-rose-600">{bulkDeleteMatchingInvoices.length} invoices</span>
+                </div>
+                <div className="flex justify-between items-center text-xs">
+                  <span className="text-slate-500 font-medium">Total Purchase Volume:</span>
+                  <span className="font-bold text-slate-900">
+                    ₹{bulkDeleteMatchingInvoices.reduce((s, i) => s + Number(i.totalAmount || 0), 0).toLocaleString('en-IN')}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center text-xs">
+                  <span className="text-slate-500 font-medium">Physical Files to Delete from Disk:</span>
+                  <span className="font-bold text-slate-700">
+                    {bulkDeleteMatchingInvoices.filter(i => i.originalBillUrl).length + bulkDeleteMatchingInvoices.filter(i => i.handwrittenSlipUrl).length} files
+                  </span>
+                </div>
+              </div>
+
+              <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-[11px] leading-relaxed">
+                <strong>Warning:</strong> Deleting these records is permanent and irreversible. All associated database rows, items, and uploaded images/slips will be immediately deleted from your server disk to save space.
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => setShowBulkDeleteModal(false)}
+                  className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 font-semibold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={bulkDeleting || bulkDeleteMatchingInvoices.length === 0}
+                  onClick={handleExecuteBulkDelete}
+                  className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold shadow-sm transition-all disabled:opacity-50 flex items-center gap-1.5"
+                >
+                  {bulkDeleting ? 'Deleting...' : `Delete ${bulkDeleteMatchingInvoices.length} Records & Free Storage`}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL 7: STORAGE & ATTACHED MEDIA MANAGER (Admin & Doctor Only)            */}
+      {/* ========================================================================= */}
+      {showStorageManagerModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-4xl w-full p-6 shadow-2xl border border-slate-200 max-h-[90vh] flex flex-col">
+            
+            {/* Modal Header */}
+            <div className="flex items-center justify-between pb-4 border-b border-slate-200 mb-4 shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center">
+                  <HardDrive className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 text-lg">Storage & Attached Media Manager</h3>
+                  <p className="text-xs text-slate-500">View saved bills and handwritten slips, and bulk delete them to save server storage</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowStorageManagerModal(false)}
+                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Selection Toolbar */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100 shrink-0 text-xs">
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (selectedMediaToDelete.length === allSavedMedia.length) {
+                      setSelectedMediaToDelete([]);
+                    } else {
+                      setSelectedMediaToDelete(allSavedMedia.map(m => m.id));
+                    }
+                  }}
+                  className="px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-50 font-semibold text-slate-700 flex items-center gap-1.5 transition-colors"
+                >
+                  {selectedMediaToDelete.length === allSavedMedia.length && allSavedMedia.length > 0 ? (
+                    <CheckSquare className="w-3.5 h-3.5 text-teal-600" />
+                  ) : (
+                    <Square className="w-3.5 h-3.5 text-slate-400" />
+                  )}
+                  <span>
+                    {selectedMediaToDelete.length === allSavedMedia.length && allSavedMedia.length > 0
+                      ? 'Deselect All'
+                      : `Select All (${allSavedMedia.length})`}
+                  </span>
+                </button>
+
+                <span className="text-slate-500">
+                  <strong className="text-slate-900">{selectedMediaToDelete.length}</strong> of {allSavedMedia.length} files selected
+                </span>
+              </div>
+
+              {selectedMediaToDelete.length > 0 && (
+                <button
+                  type="button"
+                  disabled={storageDeleting}
+                  onClick={handleDeleteSelectedAttachments}
+                  className="px-4 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold transition-all shadow-sm flex items-center gap-1.5"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>{storageDeleting ? 'Deleting...' : `Delete ${selectedMediaToDelete.length} Selected File(s)`}</span>
+                </button>
+              )}
+            </div>
+
+            {/* Media Items List / Table */}
+            <div className="flex-1 overflow-y-auto py-3">
+              {allSavedMedia.length > 0 ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {allSavedMedia.map(media => {
+                    const isSelected = selectedMediaToDelete.includes(media.id);
+                    return (
+                      <div
+                        key={media.id}
+                        className={`p-3 rounded-xl border transition-all flex flex-col justify-between ${
+                          isSelected
+                            ? 'bg-rose-50/60 border-rose-300 shadow-sm'
+                            : 'bg-white border-slate-200 hover:border-slate-300'
+                        }`}
+                      >
+                        <div>
+                          <div className="flex items-center justify-between mb-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedMediaToDelete(prev =>
+                                  isSelected ? prev.filter(id => id !== media.id) : [...prev, media.id]
+                                );
+                              }}
+                              className="flex items-center gap-1.5 text-xs font-semibold text-slate-700"
+                            >
+                              {isSelected ? (
+                                <CheckSquare className="w-4 h-4 text-rose-600" />
+                              ) : (
+                                <Square className="w-4 h-4 text-slate-400" />
+                              )}
+                              <span>Select for Deletion</span>
+                            </button>
+
+                            <span
+                              className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                                media.type === 'bill'
+                                  ? 'bg-teal-50 text-teal-700 border border-teal-200'
+                                  : 'bg-amber-50 text-amber-700 border border-amber-200'
+                              }`}
+                            >
+                              {media.type === 'bill' ? 'Original Bill' : 'Handwritten Slip'}
+                            </span>
+                          </div>
+
+                          <div className="text-xs space-y-0.5">
+                            <div className="font-bold text-slate-900 truncate">
+                              Invoice: {media.invoiceNumber}
+                            </div>
+                            <div className="text-slate-600 truncate">
+                              {media.wholesalerName || 'Unknown Wholesaler'}
+                            </div>
+                            <div className="text-[11px] text-slate-400">
+                              Date: {media.invoiceDate || 'N/A'}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (media.type === 'bill') {
+                                setSelectedBillUrl(media.fileUrl);
+                              } else {
+                                setSelectedSlipUrl(media.fileUrl);
+                              }
+                            }}
+                            className="text-xs text-teal-600 hover:text-teal-700 font-semibold flex items-center gap-1"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                            Preview File
+                          </button>
+
+                          <a
+                            href={media.fileUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-xs text-slate-400 hover:text-slate-600"
+                            title="Open direct file"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                          </a>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="py-16 text-center text-slate-400 space-y-2">
+                  <HardDrive className="w-8 h-8 mx-auto text-slate-300" />
+                  <p className="text-xs">No attached bills or handwritten slips are currently stored on the server.</p>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer Note */}
+            <div className="pt-3 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2 shrink-0 text-xs">
+              <span className="text-[11px] text-slate-400">
+                Tip: Deleting attached files frees up disk storage on your web server immediately. The purchase invoice and medicine accounting data remain intact.
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowStorageManagerModal(false)}
+                className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 font-semibold self-end"
+              >
+                Close
+              </button>
+            </div>
+
           </div>
         </div>
       )}

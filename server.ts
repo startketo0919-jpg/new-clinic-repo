@@ -80,6 +80,21 @@ async function startServer() {
   });
   app.use('/uploads/invoices', express.static(invoiceUploadDir));
 
+  // Helper to safely delete attached bill and slip files from disk to free storage
+  const deleteInvoiceFile = (fileUrl?: string | null) => {
+    if (!fileUrl) return;
+    try {
+      const filename = path.basename(fileUrl);
+      if (!filename) return;
+      const fullPath = path.join(invoiceUploadDir, filename);
+      if (fs.existsSync(fullPath)) {
+        fs.unlinkSync(fullPath);
+      }
+    } catch (err) {
+      console.error(`[Storage] Failed to delete invoice file ${fileUrl}:`, err);
+    }
+  };
+
   let clients: express.Response[] = [];
   let cachedStateData: any = null;
   let cachedStateTime = 0;
@@ -4783,8 +4798,8 @@ setInterval(async () => {
   app.delete("/api/wholesalers/:id", async (req, res) => {
     try {
       const clientRole = (req.headers['x-user-role'] as string) || '';
-      if (clientRole === 'staff') {
-        return res.status(403).json({ error: "Forbidden: Staff cannot delete wholesalers." });
+      if (clientRole !== 'admin' && clientRole !== 'doctor') {
+        return res.status(403).json({ error: "Forbidden: Only Admin and Doctor can delete wholesalers." });
       }
       await db.delete(wholesalers).where(eq(wholesalers.id, req.params.id));
       res.json({ success: true });
@@ -5029,9 +5044,14 @@ setInterval(async () => {
     }
   });
 
-  // 1-Click Paid / Unpaid Status Toggle
+  // 1-Click Paid / Unpaid Status Toggle (Strictly Admin & Doctor only)
   app.patch("/api/purchases/:id/payment", async (req, res) => {
     try {
+      const clientRole = (req.headers['x-user-role'] as string) || '';
+      if (clientRole !== 'admin' && clientRole !== 'doctor') {
+        return res.status(403).json({ error: "Forbidden: Only Admin and Doctor can change payment status." });
+      }
+
       const { paymentStatus, paidAmount, paidDate, paymentMode } = req.body;
       const invoice = await db.select().from(purchaseInvoices).where(eq(purchaseInvoices.id, req.params.id)).limit(1);
       if (!invoice || invoice.length === 0) return res.status(404).json({ error: "Invoice not found" });
@@ -5083,7 +5103,7 @@ setInterval(async () => {
     }
   });
 
-  // Delete Purchase Invoice (Strictly Admin and Doctor only)
+  // Delete Purchase Invoice (Strictly Admin and Doctor only - deletes DB rows AND associated physical files)
   app.delete("/api/purchases/:id", async (req, res) => {
     try {
       const clientRole = (req.headers['x-user-role'] as string) || '';
@@ -5091,11 +5111,95 @@ setInterval(async () => {
         return res.status(403).json({ error: "Forbidden: Only Admin and Doctor can delete purchase invoices." });
       }
 
+      // 1. Find invoice and delete physical attached files from disk
+      const inv = await db.select().from(purchaseInvoices).where(eq(purchaseInvoices.id, req.params.id)).limit(1);
+      if (inv && inv.length > 0) {
+        deleteInvoiceFile(inv[0].originalBillUrl);
+        deleteInvoiceFile(inv[0].handwrittenSlipUrl);
+      }
+
+      // 2. Delete database records
       await db.delete(purchaseItems).where(eq(purchaseItems.invoiceId, req.params.id));
       await db.delete(purchaseInvoices).where(eq(purchaseInvoices.id, req.params.id));
       res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ error: "Failed to delete purchase invoice", details: err.message });
+    }
+  });
+
+  // Bulk Delete Past Invoices by Custom Months / Interval (Admin & Doctor only)
+  app.post("/api/purchases/bulk-delete", async (req, res) => {
+    try {
+      const clientRole = (req.headers['x-user-role'] as string) || '';
+      if (clientRole !== 'admin' && clientRole !== 'doctor') {
+        return res.status(403).json({ error: "Forbidden: Only Admin and Doctor can bulk delete purchase records." });
+      }
+
+      const { specificMonth, monthsOlderThan, startDate, endDate } = req.body;
+      const allInvoices = await db.select().from(purchaseInvoices);
+
+      let toDelete = allInvoices;
+      if (specificMonth) {
+        toDelete = toDelete.filter(inv => inv.invoiceDate && inv.invoiceDate.startsWith(specificMonth));
+      } else if (monthsOlderThan) {
+        const cutoffDate = new Date();
+        cutoffDate.setMonth(cutoffDate.getMonth() - Number(monthsOlderThan));
+        const cutoffYMD = cutoffDate.toISOString().substring(0, 10);
+        toDelete = toDelete.filter(inv => inv.invoiceDate && inv.invoiceDate < cutoffYMD);
+      } else if (startDate || endDate) {
+        toDelete = toDelete.filter(inv => {
+          const d = inv.invoiceDate || '';
+          if (startDate && d < startDate) return false;
+          if (endDate && d > endDate) return false;
+          return true;
+        });
+      } else {
+        return res.status(400).json({ error: "Please specify a valid month, age, or date range for bulk deletion." });
+      }
+
+      // Delete physical attached files and DB records
+      for (const inv of toDelete) {
+        deleteInvoiceFile(inv.originalBillUrl);
+        deleteInvoiceFile(inv.handwrittenSlipUrl);
+        await db.delete(purchaseItems).where(eq(purchaseItems.invoiceId, inv.id));
+        await db.delete(purchaseInvoices).where(eq(purchaseInvoices.id, inv.id));
+      }
+
+      res.json({ success: true, count: toDelete.length });
+    } catch (err: any) {
+      res.status(500).json({ error: "Failed to bulk delete invoices", details: err.message });
+    }
+  });
+
+  // Bulk Delete Stored Images/Attachments specifically to free disk storage (Admin & Doctor only)
+  app.post("/api/purchases/delete-attachments", async (req, res) => {
+    try {
+      const clientRole = (req.headers['x-user-role'] as string) || '';
+      if (clientRole !== 'admin' && clientRole !== 'doctor') {
+        return res.status(403).json({ error: "Forbidden: Only Admin and Doctor can delete attached media." });
+      }
+
+      const { attachments } = req.body; // Array of { invoiceId, type: 'bill' | 'slip', fileUrl }
+      if (!Array.isArray(attachments) || attachments.length === 0) {
+        return res.status(400).json({ error: "No attachments specified for deletion." });
+      }
+
+      let deletedCount = 0;
+      for (const att of attachments) {
+        deleteInvoiceFile(att.fileUrl);
+        if (att.invoiceId) {
+          if (att.type === 'bill') {
+            await db.update(purchaseInvoices).set({ originalBillUrl: null }).where(eq(purchaseInvoices.id, att.invoiceId));
+          } else if (att.type === 'slip') {
+            await db.update(purchaseInvoices).set({ handwrittenSlipUrl: null }).where(eq(purchaseInvoices.id, att.invoiceId));
+          }
+        }
+        deletedCount++;
+      }
+
+      res.json({ success: true, count: deletedCount });
+    } catch (err: any) {
+      res.status(500).json({ error: "Failed to delete attachments", details: err.message });
     }
   });
 
