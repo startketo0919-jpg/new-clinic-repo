@@ -233,6 +233,68 @@ export async function initDb() {
       min_order_amount INT NULL,
       is_active BOOLEAN DEFAULT TRUE,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`,
+
+    `CREATE TABLE IF NOT EXISTS wholesalers (
+      id VARCHAR(191) PRIMARY KEY,
+      name VARCHAR(255) NOT NULL,
+      city VARCHAR(100) NOT NULL,
+      state VARCHAR(100) DEFAULT '',
+      contact_person VARCHAR(150) DEFAULT '',
+      phone VARCHAR(50) DEFAULT '',
+      email VARCHAR(255) DEFAULT '',
+      gst_number VARCHAR(50) DEFAULT '',
+      address TEXT,
+      payment_terms VARCHAR(100) DEFAULT 'Credit',
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`,
+
+    `CREATE TABLE IF NOT EXISTS purchase_invoices (
+      id VARCHAR(191) PRIMARY KEY,
+      invoice_number VARCHAR(100) NOT NULL,
+      wholesaler_id VARCHAR(191) NOT NULL,
+      wholesaler_name VARCHAR(255) NOT NULL,
+      wholesaler_city VARCHAR(100) NOT NULL,
+      invoice_date VARCHAR(20) NOT NULL,
+      received_date TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      destination_type VARCHAR(50) NOT NULL DEFAULT 'Clinic',
+      total_amount INT NOT NULL DEFAULT 0,
+      clinic_amount INT NOT NULL DEFAULT 0,
+      store_amount INT NOT NULL DEFAULT 0,
+      payment_status VARCHAR(50) NOT NULL DEFAULT 'Unpaid',
+      paid_amount INT DEFAULT 0,
+      paid_date VARCHAR(20) DEFAULT NULL,
+      payment_mode VARCHAR(50) DEFAULT NULL,
+      due_date VARCHAR(20) DEFAULT NULL,
+      original_bill_url TEXT DEFAULT NULL,
+      handwritten_slip_url TEXT DEFAULT NULL,
+      notes TEXT DEFAULT NULL,
+      is_verified BOOLEAN DEFAULT FALSE,
+      erp_status VARCHAR(50) DEFAULT 'Pending',
+      erp_document_number VARCHAR(100) DEFAULT NULL,
+      erp_updated_by VARCHAR(100) DEFAULT NULL,
+      erp_updated_at TIMESTAMP NULL DEFAULT NULL,
+      created_by VARCHAR(100) NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`,
+
+    `CREATE TABLE IF NOT EXISTS purchase_items (
+      id VARCHAR(191) PRIMARY KEY,
+      invoice_id VARCHAR(191) NOT NULL,
+      medicine_name VARCHAR(255) NOT NULL,
+      potency_or_pack VARCHAR(100) DEFAULT '',
+      batch_number VARCHAR(100) DEFAULT '',
+      expiry_date VARCHAR(50) DEFAULT '',
+      quantity INT NOT NULL DEFAULT 1,
+      unit VARCHAR(50) DEFAULT 'Bottles',
+      purchase_price INT NOT NULL DEFAULT 0,
+      gst_percent INT DEFAULT 12,
+      total_amount INT NOT NULL DEFAULT 0,
+      allocated_to VARCHAR(50) NOT NULL DEFAULT 'Clinic',
+      erp_stock_updated BOOLEAN DEFAULT FALSE,
+      erp_document_number VARCHAR(100) DEFAULT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`
   ];
 
@@ -262,7 +324,8 @@ export async function initDb() {
     `ALTER TABLE promo_codes ADD COLUMN IF NOT EXISTS new_patients_only BOOLEAN DEFAULT FALSE;`,
     `ALTER TABLE promo_codes ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP NULL;`,
     `ALTER TABLE promo_codes ADD COLUMN IF NOT EXISTS min_order_amount INT DEFAULT NULL;`,
-    `ALTER TABLE settings ADD COLUMN IF NOT EXISTS default_google_meet_link TEXT;`
+    `ALTER TABLE settings ADD COLUMN IF NOT EXISTS default_google_meet_link TEXT;`,
+    `ALTER TABLE settings ADD COLUMN IF NOT EXISTS purchase_staff_view_window_days INT DEFAULT 30;`
   ];
 
   for (const alterQ of alterSettingsQueries) {

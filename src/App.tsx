@@ -16,6 +16,7 @@ import SetupPage from './pages/SetupPage';
 import BookAppointment from './pages/BookAppointment';
 import RescheduleAppointment from './pages/RescheduleAppointment';
 import TrackCourier from './pages/TrackCourier';
+import PurchasesPage from './pages/PurchasesPage';
 
 interface ErrorBoundaryProps {
   children: React.ReactNode;
@@ -94,6 +95,9 @@ export default function App() {
             <Route path="/track-courier" element={<TrackCourier />} />
             <Route path="/track-order" element={<TrackCourier />} />
             <Route path="/courier-tracking" element={<TrackCourier />} />
+            <Route path="/purchases" element={<PurchasesPage />} />
+            <Route path="/purchase" element={<PurchasesPage />} />
+            <Route path="/invoices" element={<PurchasesPage />} />
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
         </BrowserRouter>

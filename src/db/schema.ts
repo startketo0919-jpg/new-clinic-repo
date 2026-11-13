@@ -89,6 +89,7 @@ export const settings = mysqlTable("settings", {
   followUpFee: int("follow_up_fee").default(0),
   sameConcernFee: int("same_concern_fee").default(19900),
   defaultGoogleMeetLink: text("default_google_meet_link"),
+  purchaseStaffViewWindowDays: int("purchase_staff_view_window_days").default(30),
 });
 
 export const whatsappMessages = mysqlTable("whatsapp_messages", {
@@ -244,6 +245,68 @@ export const promoCodes = mysqlTable("promo_codes", {
   expiresAt: timestamp("expires_at"),
   minOrderAmount: int("min_order_amount"),
   isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const wholesalers = mysqlTable("wholesalers", {
+  id: varchar("id", { length: 191 }).primaryKey(),
+  name: varchar("name", { length: 255 }).notNull(),
+  city: varchar("city", { length: 100 }).notNull(),
+  state: varchar("state", { length: 100 }).default(""),
+  contactPerson: varchar("contact_person", { length: 150 }).default(""),
+  phone: varchar("phone", { length: 50 }).default(""),
+  email: varchar("email", { length: 255 }).default(""),
+  gstNumber: varchar("gst_number", { length: 50 }).default(""),
+  address: text("address"),
+  paymentTerms: varchar("payment_terms", { length: 100 }).default("Credit"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const purchaseInvoices = mysqlTable("purchase_invoices", {
+  id: varchar("id", { length: 191 }).primaryKey(),
+  invoiceNumber: varchar("invoice_number", { length: 100 }).notNull(),
+  wholesalerId: varchar("wholesaler_id", { length: 191 }).notNull(),
+  wholesalerName: varchar("wholesaler_name", { length: 255 }).notNull(),
+  wholesalerCity: varchar("wholesaler_city", { length: 100 }).notNull(),
+  invoiceDate: varchar("invoice_date", { length: 20 }).notNull(),
+  receivedDate: timestamp("received_date").notNull().defaultNow(),
+  destinationType: varchar("destination_type", { length: 50 }).notNull().default("Clinic"), // 'Clinic' | 'Store' | 'Split'
+  totalAmount: int("total_amount").notNull().default(0), // in Rupees
+  clinicAmount: int("clinic_amount").notNull().default(0),
+  storeAmount: int("store_amount").notNull().default(0),
+  paymentStatus: varchar("payment_status", { length: 50 }).notNull().default("Unpaid"), // 'Paid' | 'Unpaid'
+  paidAmount: int("paid_amount").default(0),
+  paidDate: varchar("paid_date", { length: 20 }),
+  paymentMode: varchar("payment_mode", { length: 50 }), // 'Cash' | 'UPI' | 'NEFT/Bank' | 'Cheque' | 'Credit'
+  dueDate: varchar("due_date", { length: 20 }),
+  originalBillUrl: text("original_bill_url"),
+  handwrittenSlipUrl: text("handwritten_slip_url"),
+  notes: text("notes"),
+  isVerified: boolean("is_verified").default(false),
+  erpStatus: varchar("erp_status", { length: 50 }).default("Pending"), // 'Pending' | 'Completed'
+  erpDocumentNumber: varchar("erp_document_number", { length: 100 }),
+  erpUpdatedBy: varchar("erp_updated_by", { length: 100 }),
+  erpUpdatedAt: timestamp("erp_updated_at"),
+  createdBy: varchar("created_by", { length: 100 }).notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at"),
+});
+
+export const purchaseItems = mysqlTable("purchase_items", {
+  id: varchar("id", { length: 191 }).primaryKey(),
+  invoiceId: varchar("invoice_id", { length: 191 }).notNull(),
+  medicineName: varchar("medicine_name", { length: 255 }).notNull(),
+  potencyOrPack: varchar("potency_or_pack", { length: 100 }).default(""),
+  batchNumber: varchar("batch_number", { length: 100 }).default(""),
+  expiryDate: varchar("expiry_date", { length: 50 }).default(""),
+  quantity: int("quantity").notNull().default(1),
+  unit: varchar("unit", { length: 50 }).default("Bottles"),
+  purchasePrice: int("purchase_price").notNull().default(0),
+  gstPercent: int("gst_percent").default(12),
+  totalAmount: int("total_amount").notNull().default(0),
+  allocatedTo: varchar("allocated_to", { length: 50 }).notNull().default("Clinic"), // 'Clinic' | 'Store'
+  erpStockUpdated: boolean("erp_stock_updated").default(false),
+  erpDocumentNumber: varchar("erp_document_number", { length: 100 }),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 

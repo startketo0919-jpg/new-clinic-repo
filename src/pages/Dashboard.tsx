@@ -9,7 +9,7 @@ import UserManagement from '../components/UserManagement';
 import DelhiveryCourier from '../components/DelhiveryCourier';
 import ShipmentManagement from '../components/ShipmentManagement';
 import OnlineAppointments from '../components/OnlineAppointments';
-import { LogOut, Activity, Users, Clock, CheckCircle, XCircle, LayoutDashboard, History, Settings, UserCog, Calendar, Package, Truck, Video } from 'lucide-react';
+import { LogOut, Activity, Users, Clock, CheckCircle, XCircle, LayoutDashboard, History, Settings, UserCog, Calendar, Package, Truck, Video, FileText } from 'lucide-react';
 import { getLocalTodayString, isSameDayLocal } from "../lib/dateUtils";
 import WhatsAppWidget from "../components/WhatsAppWidget";
 import { useNavigate } from 'react-router-dom';
@@ -138,6 +138,13 @@ export default function Dashboard() {
                 <UserCog className="w-4 h-4" /> Manage Users
               </button>
             )}
+            <button
+              onClick={() => navigate('/purchases')}
+              className="px-3 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-2 text-slate-300 hover:text-white hover:bg-slate-800 border border-slate-700/60"
+              title="Purchase Invoices & Stock"
+            >
+              <FileText className="w-4 h-4 text-emerald-400" /> Purchases
+            </button>
           </div>
         </div>
 

@@ -9,8 +9,8 @@ import { createServer as createViteServer } from "vite";
 import { db, pool } from "./src/db/index.js";
 import { initDb } from "./src/db/init.js";
 import { hashPassword, verifyPassword, generateAuthToken } from "./src/db/auth-utils.js";
-import { liveQueue, patientRegistry, users, appointments, settings, whatsappMessages, whatsappTemplates, delhiveryOrders, patientShipments, onlineAppointments, appointmentFiles, rescheduleOtps, specialFeePatients, customBookingLinks, promoCodes } from "./src/db/schema.js";
-import { eq, desc, asc, and } from "drizzle-orm";
+import { liveQueue, patientRegistry, users, appointments, settings, whatsappMessages, whatsappTemplates, delhiveryOrders, patientShipments, onlineAppointments, appointmentFiles, rescheduleOtps, specialFeePatients, customBookingLinks, promoCodes, wholesalers, purchaseInvoices, purchaseItems } from "./src/db/schema.js";
+import { eq, desc, asc, and, gte } from "drizzle-orm";
 import { requireStaffAuth, requireAdminAuth, requireDoctorOrAdminAuth, optionalAuth, AuthRequest } from "./src/middleware/auth.js";
 import { 
   getClientIp, 
@@ -58,6 +58,27 @@ async function startServer() {
       cb(null, allowed.includes(file.mimetype));
     }
   });
+
+  // File upload config for purchase invoices & handwritten slips
+  const invoiceUploadDir = path.join(process.cwd(), 'uploads', 'invoices');
+  if (!fs.existsSync(invoiceUploadDir)) fs.mkdirSync(invoiceUploadDir, { recursive: true });
+  const invoiceStorage = multer.diskStorage({
+    destination: (req, file, cb) => cb(null, invoiceUploadDir),
+    filename: (req, file, cb) => {
+      const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
+      const cleanName = `${Date.now()}_${Math.random().toString(36).substring(2, 8)}${ext}`;
+      cb(null, cleanName);
+    }
+  });
+  const invoiceUpload = multer({
+    storage: invoiceStorage,
+    limits: { fileSize: 25 * 1024 * 1024 }, // 25MB
+    fileFilter: (req, file, cb) => {
+      const allowed = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+      cb(null, allowed.includes(file.mimetype));
+    }
+  });
+  app.use('/uploads/invoices', express.static(invoiceUploadDir));
 
   let clients: express.Response[] = [];
   let cachedStateData: any = null;
@@ -4689,6 +4710,367 @@ setInterval(async () => {
     if (files.length > 0) console.log(`[Cron] Cleaned up ${files.length} expired appointment files`);
   } catch (e) { console.error('[Cron] File cleanup error:', e); }
 }, 60 * 60 * 1000);
+
+  // ==========================================
+  // PURCHASE INVOICES & WHOLESALERS API ROUTES
+  // ==========================================
+
+  // Upload original bill or handwritten slip
+  app.post("/api/purchases/upload", invoiceUpload.single("file"), (req, res) => {
+    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+    const fileUrl = `/uploads/invoices/${req.file.filename}`;
+    res.json({ success: true, fileUrl, filename: req.file.filename, originalName: req.file.originalname });
+  });
+
+  // Wholesalers Master List
+  app.get("/api/wholesalers", async (req, res) => {
+    try {
+      const list = await db.select().from(wholesalers).orderBy(asc(wholesalers.name));
+      res.json(list);
+    } catch (err: any) {
+      res.status(500).json({ error: "Failed to fetch wholesalers", details: err.message });
+    }
+  });
+
+  // Create Wholesaler
+  app.post("/api/wholesalers", async (req, res) => {
+    try {
+      const { name, city, state, contactPerson, phone, email, gstNumber, address, paymentTerms } = req.body;
+      if (!name || !city) return res.status(400).json({ error: "Wholesaler Name and City are required" });
+      const id = "ws_" + crypto.randomUUID();
+      await db.insert(wholesalers).values({
+        id,
+        name: name.trim(),
+        city: city.trim(),
+        state: (state || "").trim(),
+        contactPerson: (contactPerson || "").trim(),
+        phone: (phone || "").trim(),
+        email: (email || "").trim(),
+        gstNumber: (gstNumber || "").trim().toUpperCase(),
+        address: (address || "").trim(),
+        paymentTerms: paymentTerms || "Credit"
+      });
+      res.json({ success: true, id });
+    } catch (err: any) {
+      res.status(500).json({ error: "Failed to create wholesaler", details: err.message });
+    }
+  });
+
+  // Update Wholesaler
+  app.put("/api/wholesalers/:id", async (req, res) => {
+    try {
+      const { name, city, state, contactPerson, phone, email, gstNumber, address, paymentTerms } = req.body;
+      await db.update(wholesalers)
+        .set({
+          name: name?.trim(),
+          city: city?.trim(),
+          state: state?.trim(),
+          contactPerson: contactPerson?.trim(),
+          phone: phone?.trim(),
+          email: email?.trim(),
+          gstNumber: gstNumber?.trim().toUpperCase(),
+          address: address?.trim(),
+          paymentTerms: paymentTerms || "Credit"
+        })
+        .where(eq(wholesalers.id, req.params.id));
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: "Failed to update wholesaler", details: err.message });
+    }
+  });
+
+  // Delete Wholesaler (Admin/Doctor only)
+  app.delete("/api/wholesalers/:id", async (req, res) => {
+    try {
+      const clientRole = (req.headers['x-user-role'] as string) || '';
+      if (clientRole === 'staff') {
+        return res.status(403).json({ error: "Forbidden: Staff cannot delete wholesalers." });
+      }
+      await db.delete(wholesalers).where(eq(wholesalers.id, req.params.id));
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: "Failed to delete wholesaler", details: err.message });
+    }
+  });
+
+  // List Purchases with Role-Based Time Window (Staff: default 30 days; Admin/Doctor: All-time)
+  app.get("/api/purchases", async (req, res) => {
+    try {
+      const clientRole = (req.headers['x-user-role'] as string) || 'staff';
+      const settingsRow = await db.select().from(settings).where(eq(settings.id, "default")).limit(1);
+      const windowDays = settingsRow[0]?.purchaseStaffViewWindowDays || 30;
+
+      let invoices = [];
+      if (clientRole === 'staff') {
+        const cutoffDate = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
+        invoices = await db.select()
+          .from(purchaseInvoices)
+          .where(gte(purchaseInvoices.receivedDate, cutoffDate))
+          .orderBy(desc(purchaseInvoices.receivedDate));
+      } else {
+        invoices = await db.select()
+          .from(purchaseInvoices)
+          .orderBy(desc(purchaseInvoices.receivedDate));
+      }
+
+      res.json({ invoices, windowDays, role: clientRole });
+    } catch (err: any) {
+      res.status(500).json({ error: "Failed to fetch purchase invoices", details: err.message });
+    }
+  });
+
+  // Get Single Purchase Details with Line Items
+  app.get("/api/purchases/:id", async (req, res) => {
+    try {
+      const invoice = await db.select().from(purchaseInvoices).where(eq(purchaseInvoices.id, req.params.id)).limit(1);
+      if (!invoice || invoice.length === 0) return res.status(404).json({ error: "Invoice not found" });
+      const items = await db.select().from(purchaseItems).where(eq(purchaseItems.invoiceId, req.params.id));
+      res.json({ invoice: invoice[0], items });
+    } catch (err: any) {
+      res.status(500).json({ error: "Failed to fetch invoice", details: err.message });
+    }
+  });
+
+  // Create Purchase Invoice (Clinic / Store / Split)
+  app.post("/api/purchases", async (req, res) => {
+    try {
+      const {
+        invoiceNumber,
+        wholesalerId,
+        wholesalerName,
+        wholesalerCity,
+        invoiceDate,
+        destinationType,
+        totalAmount,
+        clinicAmount,
+        storeAmount,
+        paymentStatus,
+        paidAmount,
+        paidDate,
+        paymentMode,
+        dueDate,
+        originalBillUrl,
+        handwrittenSlipUrl,
+        notes,
+        items,
+        createdBy
+      } = req.body;
+
+      if (!invoiceNumber || !wholesalerId) {
+        return res.status(400).json({ error: "Invoice number and wholesaler are required" });
+      }
+
+      const id = "inv_" + crypto.randomUUID();
+      const grossAmount = Number(totalAmount || 0);
+      let cAmt = Number(clinicAmount || 0);
+      let sAmt = Number(storeAmount || 0);
+
+      // Default allocations if not explicitly split
+      if (destinationType === 'Clinic') {
+        cAmt = grossAmount;
+        sAmt = 0;
+      } else if (destinationType === 'Store') {
+        cAmt = 0;
+        sAmt = grossAmount;
+      }
+
+      await db.insert(purchaseInvoices).values({
+        id,
+        invoiceNumber: invoiceNumber.trim(),
+        wholesalerId,
+        wholesalerName: wholesalerName || "",
+        wholesalerCity: wholesalerCity || "",
+        invoiceDate: invoiceDate || new Date().toISOString().substring(0, 10),
+        receivedDate: new Date(),
+        destinationType: destinationType || "Clinic",
+        totalAmount: grossAmount,
+        clinicAmount: cAmt,
+        storeAmount: sAmt,
+        paymentStatus: paymentStatus || "Unpaid",
+        paidAmount: paymentStatus === 'Paid' ? (Number(paidAmount) || grossAmount) : 0,
+        paidDate: paymentStatus === 'Paid' ? (paidDate || invoiceDate) : null,
+        paymentMode: paymentMode || null,
+        dueDate: dueDate || null,
+        originalBillUrl: originalBillUrl || null,
+        handwrittenSlipUrl: handwrittenSlipUrl || null,
+        notes: notes || null,
+        isVerified: false,
+        erpStatus: "Pending",
+        createdBy: createdBy || "staff"
+      });
+
+      // Insert line items
+      if (Array.isArray(items) && items.length > 0) {
+        for (const item of items) {
+          if (!item.medicineName) continue;
+          await db.insert(purchaseItems).values({
+            id: "item_" + crypto.randomUUID(),
+            invoiceId: id,
+            medicineName: item.medicineName.trim(),
+            potencyOrPack: item.potencyOrPack || "",
+            batchNumber: item.batchNumber || "",
+            expiryDate: item.expiryDate || "",
+            quantity: Number(item.quantity || 1),
+            unit: item.unit || "Bottles",
+            purchasePrice: Number(item.purchasePrice || 0),
+            gstPercent: Number(item.gstPercent || 12),
+            totalAmount: Number(item.totalAmount || 0),
+            allocatedTo: item.allocatedTo || (destinationType === 'Store' ? 'Store' : 'Clinic'),
+            erpStockUpdated: false
+          });
+        }
+      }
+
+      res.json({ success: true, id });
+    } catch (err: any) {
+      res.status(500).json({ error: "Failed to save purchase invoice", details: err.message });
+    }
+  });
+
+  // 1-Click Paid / Unpaid Status Toggle
+  app.patch("/api/purchases/:id/payment", async (req, res) => {
+    try {
+      const { paymentStatus, paidAmount, paidDate, paymentMode } = req.body;
+      const invoice = await db.select().from(purchaseInvoices).where(eq(purchaseInvoices.id, req.params.id)).limit(1);
+      if (!invoice || invoice.length === 0) return res.status(404).json({ error: "Invoice not found" });
+
+      const isPaid = paymentStatus === 'Paid';
+      await db.update(purchaseInvoices)
+        .set({
+          paymentStatus: isPaid ? 'Paid' : 'Unpaid',
+          paidAmount: isPaid ? (Number(paidAmount) || invoice[0].totalAmount) : 0,
+          paidDate: isPaid ? (paidDate || new Date().toISOString().substring(0, 10)) : null,
+          paymentMode: isPaid ? (paymentMode || 'Cash') : null
+        })
+        .where(eq(purchaseInvoices.id, req.params.id));
+
+      res.json({ success: true, paymentStatus: isPaid ? 'Paid' : 'Unpaid' });
+    } catch (err: any) {
+      res.status(500).json({ error: "Failed to update payment status", details: err.message });
+    }
+  });
+
+  // Mark ERP Stock Entered with Document Number Prompt
+  app.patch("/api/purchases/:id/erp-status", async (req, res) => {
+    try {
+      const { erpDocumentNumber, erpStatus, updatedBy } = req.body;
+      const docNo = erpDocumentNumber ? erpDocumentNumber.trim() : null;
+      const status = erpStatus || "Completed";
+
+      await db.update(purchaseInvoices)
+        .set({
+          erpStatus: status,
+          erpDocumentNumber: docNo,
+          erpUpdatedBy: updatedBy || "staff",
+          erpUpdatedAt: new Date()
+        })
+        .where(eq(purchaseInvoices.id, req.params.id));
+
+      if (docNo) {
+        await db.update(purchaseItems)
+          .set({
+            erpStockUpdated: true,
+            erpDocumentNumber: docNo
+          })
+          .where(eq(purchaseItems.invoiceId, req.params.id));
+      }
+
+      res.json({ success: true, erpDocumentNumber: docNo, erpStatus: status });
+    } catch (err: any) {
+      res.status(500).json({ error: "Failed to update ERP status", details: err.message });
+    }
+  });
+
+  // Delete Purchase Invoice (Strictly Admin and Doctor only)
+  app.delete("/api/purchases/:id", async (req, res) => {
+    try {
+      const clientRole = (req.headers['x-user-role'] as string) || '';
+      if (clientRole !== 'admin' && clientRole !== 'doctor') {
+        return res.status(403).json({ error: "Forbidden: Only Admin and Doctor can delete purchase invoices." });
+      }
+
+      await db.delete(purchaseItems).where(eq(purchaseItems.invoiceId, req.params.id));
+      await db.delete(purchaseInvoices).where(eq(purchaseInvoices.id, req.params.id));
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: "Failed to delete purchase invoice", details: err.message });
+    }
+  });
+
+  // Visual Analytics for Purchase Dashboard
+  app.get("/api/purchases/analytics", async (req, res) => {
+    try {
+      const allInvoices = await db.select().from(purchaseInvoices).orderBy(desc(purchaseInvoices.receivedDate));
+      
+      let totalSpend = 0;
+      let totalClinic = 0;
+      let totalStore = 0;
+      let totalPaid = 0;
+      let totalUnpaid = 0;
+      let pendingErpCount = 0;
+
+      const wholesalerMap: Record<string, { name: string; city: string; amount: number; count: number }> = {};
+      const monthlyMap: Record<string, { month: string; clinic: number; store: number; total: number }> = {};
+      const cityMap: Record<string, number> = {};
+
+      allInvoices.forEach(inv => {
+        const amt = Number(inv.totalAmount || 0);
+        const cAmt = Number(inv.clinicAmount || (inv.destinationType === 'Clinic' ? amt : 0));
+        const sAmt = Number(inv.storeAmount || (inv.destinationType === 'Store' ? amt : 0));
+        
+        totalSpend += amt;
+        totalClinic += cAmt;
+        totalStore += sAmt;
+
+        if (inv.paymentStatus === 'Paid') {
+          totalPaid += (Number(inv.paidAmount) || amt);
+        } else {
+          totalUnpaid += amt;
+        }
+
+        if (inv.erpStatus !== 'Completed') {
+          pendingErpCount += 1;
+        }
+
+        const wsKey = inv.wholesalerId || inv.wholesalerName;
+        if (!wholesalerMap[wsKey]) {
+          wholesalerMap[wsKey] = { name: inv.wholesalerName, city: inv.wholesalerCity, amount: 0, count: 0 };
+        }
+        wholesalerMap[wsKey].amount += amt;
+        wholesalerMap[wsKey].count += 1;
+
+        const city = inv.wholesalerCity || 'Other';
+        cityMap[city] = (cityMap[city] || 0) + amt;
+
+        const monthKey = inv.invoiceDate ? inv.invoiceDate.substring(0, 7) : 'Recent';
+        if (!monthlyMap[monthKey]) {
+          monthlyMap[monthKey] = { month: monthKey, clinic: 0, store: 0, total: 0 };
+        }
+        monthlyMap[monthKey].clinic += cAmt;
+        monthlyMap[monthKey].store += sAmt;
+        monthlyMap[monthKey].total += amt;
+      });
+
+      const topWholesalers = Object.values(wholesalerMap).sort((a, b) => b.amount - a.amount);
+      const monthlyTrend = Object.values(monthlyMap).sort((a, b) => a.month.localeCompare(b.month));
+      const cityBreakdown = Object.entries(cityMap).map(([city, amount]) => ({ city, amount })).sort((a, b) => b.amount - a.amount);
+
+      res.json({
+        totalSpend,
+        totalClinic,
+        totalStore,
+        totalPaid,
+        totalUnpaid,
+        totalInvoices: allInvoices.length,
+        pendingErpCount,
+        topWholesalers,
+        monthlyTrend,
+        cityBreakdown
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: "Failed to generate analytics", details: err.message });
+    }
+  });
 
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({ server: { middlewareMode: true }, appType: "spa" });

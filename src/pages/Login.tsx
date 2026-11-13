@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Stethoscope, Monitor, Smartphone, UserRound, Lock, KeyRound, Mail, ArrowLeft, RefreshCw, CheckCircle2, Calendar, Truck } from 'lucide-react';
+import { Stethoscope, Monitor, Smartphone, UserRound, Lock, KeyRound, Mail, ArrowLeft, RefreshCw, CheckCircle2, Calendar, Truck, Package } from 'lucide-react';
 import { useClinic } from '../context/ClinicContext';
 
 export default function Login() {
@@ -302,6 +302,13 @@ export default function Login() {
             >
               <Truck className="w-4 h-4" />
               Track Medicine Courier
+            </button>
+            <button
+              onClick={() => navigate('/purchases')}
+              className="w-full flex items-center justify-center gap-2 bg-slate-700 hover:bg-slate-800 text-white font-semibold py-3.5 px-6 rounded-xl transition-all shadow-sm text-sm"
+            >
+              <Package className="w-4 h-4 text-teal-400" />
+              Purchase & Store Invoices
             </button>
             <button
               onClick={() => navigate('/reschedule')}

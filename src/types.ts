@@ -177,3 +177,70 @@ export interface PromoCode {
   createdAt: string;
 }
 
+export type DestinationType = 'Clinic' | 'Store' | 'Split';
+export type PurchasePaymentStatus = 'Paid' | 'Unpaid';
+export type PurchasePaymentMode = 'Cash' | 'UPI' | 'NEFT/Bank' | 'Cheque' | 'Credit';
+export type ErpStatus = 'Pending' | 'Completed';
+
+export interface Wholesaler {
+  id: string;
+  name: string;
+  city: string;
+  state?: string;
+  contactPerson?: string;
+  phone?: string;
+  email?: string;
+  gstNumber?: string;
+  address?: string;
+  paymentTerms?: string;
+  createdAt: number;
+}
+
+export interface PurchaseItem {
+  id: string;
+  invoiceId: string;
+  medicineName: string;
+  potencyOrPack?: string;
+  batchNumber?: string;
+  expiryDate?: string;
+  quantity: number;
+  unit: string;
+  purchasePrice: number;
+  gstPercent: number;
+  totalAmount: number;
+  allocatedTo: 'Clinic' | 'Store';
+  erpStockUpdated: boolean;
+  erpDocumentNumber?: string;
+  createdAt: number;
+}
+
+export interface PurchaseInvoice {
+  id: string;
+  invoiceNumber: string;
+  wholesalerId: string;
+  wholesalerName: string;
+  wholesalerCity: string;
+  invoiceDate: string;
+  receivedDate: number;
+  destinationType: DestinationType;
+  totalAmount: number; // in Rupees
+  clinicAmount: number;
+  storeAmount: number;
+  paymentStatus: PurchasePaymentStatus;
+  paidAmount?: number;
+  paidDate?: string;
+  paymentMode?: PurchasePaymentMode;
+  dueDate?: string;
+  originalBillUrl?: string;
+  handwrittenSlipUrl?: string;
+  notes?: string;
+  isVerified: boolean;
+  erpStatus: ErpStatus;
+  erpDocumentNumber?: string;
+  erpUpdatedBy?: string;
+  erpUpdatedAt?: number;
+  createdBy: string;
+  createdAt: number;
+  items?: PurchaseItem[];
+}
+
