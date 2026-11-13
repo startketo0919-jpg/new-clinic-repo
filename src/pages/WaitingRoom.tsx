@@ -29,13 +29,10 @@ export default function WaitingRoom() {
     };
   }, []);
 
-  // 2. High-reliability live sync polling every 4 seconds
+  // 2. Fetch initial state on mount and sync on wake/focus.
+  // Real-time queue updates are driven event-by-event via SSE (Zero polling loops)
   useEffect(() => {
     fetchState();
-
-    const syncTimer = setInterval(() => {
-      fetchState();
-    }, 4000);
 
     const onWake = () => {
       if (document.visibilityState === 'visible') {
@@ -47,7 +44,6 @@ export default function WaitingRoom() {
     document.addEventListener('visibilitychange', onWake);
 
     return () => {
-      clearInterval(syncTimer);
       window.removeEventListener('focus', fetchState);
       document.removeEventListener('visibilitychange', onWake);
     };

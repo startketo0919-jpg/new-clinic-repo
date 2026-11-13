@@ -44,7 +44,6 @@ async function startServer() {
   app.set('trust proxy', 1);
   app.disable("x-powered-by");
   app.use(securityHeaders);
-  app.use("/api", apiAntiAbuseLimiter);
   app.use(cors());
   app.use(express.json());
 
@@ -61,7 +60,16 @@ async function startServer() {
   });
 
   let clients: express.Response[] = [];
+  let cachedStateData: any = null;
+  let cachedStateTime = 0;
+
+  const invalidateStateCache = () => {
+    cachedStateData = null;
+    cachedStateTime = 0;
+  };
+
   const notifyClients = () => {
+    invalidateStateCache();
     clients.forEach(client => {
       try {
         client.write(`data: update\n\n`);
@@ -94,15 +102,33 @@ async function startServer() {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
     res.setHeader("Pragma", "no-cache");
     res.setHeader("Expires", "0");
+
+    // Serve from cache if fresh (within 3 seconds) to eliminate heavy redundant database load
+    if (cachedStateData && (Date.now() - cachedStateTime < 3000)) {
+      return res.json(cachedStateData);
+    }
+
     try {
-      const dbPatients = await db.select().from(liveQueue).orderBy(asc(liveQueue.sortOrder), asc(liveQueue.checkInTime));
-      const dbRegistry = await db.select().from(patientRegistry);
-      const dbAppointments = await db.select().from(appointments);
-      const dbShipments = await db.select().from(patientShipments).orderBy(desc(patientShipments.createdAt));
-      const dbMessages = await db.select().from(whatsappMessages).orderBy(whatsappMessages.timestamp);
-      const dbTemplates = await db.select().from(whatsappTemplates);
-      const dbSettings = await db.select().from(settings).where(eq(settings.id, "default")).limit(1);
-      let dbUsers = await db.select().from(users);
+      // Execute all queries in parallel via Promise.all (not sequential)
+      const [
+        dbPatients,
+        dbRegistry,
+        dbAppointments,
+        dbShipments,
+        dbMessages,
+        dbTemplates,
+        dbSettings,
+        dbUsers
+      ] = await Promise.all([
+        db.select().from(liveQueue).orderBy(asc(liveQueue.sortOrder), asc(liveQueue.checkInTime)),
+        db.select().from(patientRegistry),
+        db.select().from(appointments),
+        db.select().from(patientShipments).orderBy(desc(patientShipments.createdAt)),
+        db.select().from(whatsappMessages).orderBy(whatsappMessages.timestamp),
+        db.select().from(whatsappTemplates),
+        db.select().from(settings).where(eq(settings.id, "default")).limit(1),
+        db.select().from(users)
+      ]);
 
       const toTs = (d: any, fallback?: number) => {
         const t = d ? new Date(d).getTime() : NaN;
@@ -111,7 +137,7 @@ async function startServer() {
       const parseDate = (d: any) => toTs(d, Date.now())!;
       const parseOptionalDate = (d: any) => toTs(d);
 
-      res.json({
+      const statePayload = {
         patients: dbPatients.map(p => ({ 
           ...p, 
           checkInTime: parseDate(p.checkInTime), 
@@ -139,7 +165,11 @@ async function startServer() {
           whatsappApiKey: "", whatsappPhoneId: "", currentPatientId: null, nextSequence: 1,
           waAutoRegisterSameDay: true, waAutoRegisterFuture: true, waAutoQueueAlert: true, waAutoFollowUp: true 
         }
-      });
+      };
+
+      cachedStateData = statePayload;
+      cachedStateTime = Date.now();
+      res.json(statePayload);
     } catch (error: any) {
       res.status(500).json({ error: "Failed to fetch state", details: error.message });
     }

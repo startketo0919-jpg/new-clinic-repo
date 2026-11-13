@@ -124,15 +124,9 @@ export function ClinicProvider({ children }: { children: React.ReactNode }) {
 
     setupSSE();
 
-    // Resilient fallback polling every 5 seconds to guarantee sync on Smart TVs & background tabs
-    const pollInterval = setInterval(() => {
-      fetchState();
-    }, 5000);
-
     return () => {
       isMounted = false;
       clearTimeout(reconnectTimeout);
-      clearInterval(pollInterval);
       if (eventSource) {
         try { eventSource.close(); } catch {}
       }
