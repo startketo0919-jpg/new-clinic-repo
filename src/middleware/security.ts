@@ -117,16 +117,28 @@ export function clearOtpVerifyFailures(key: string) {
   otpVerifyFailures.delete(key);
 }
 
-// 4. Anti-Scraping / General API Flood Limiter: 120 calls per minute per IP for mutating routes
+// 4. Anti-Scraping / General API Flood Limiter: Excludes read-only live sync (state & events)
 const generalApiTracker = new Map<string, number[]>();
 
 export function apiAntiAbuseLimiter(req: Request, res: Response, next: NextFunction) {
+  // Allow read-only live state polling and SSE streams without consuming rate limit
+  const path = req.path || '';
+  const url = req.originalUrl || '';
+  if (
+    path === '/state' || 
+    path === '/events' || 
+    url.includes('/api/state') || 
+    url.includes('/api/events')
+  ) {
+    return next();
+  }
+
   const ip = getClientIp(req);
   const now = Date.now();
   const windowMs = 60 * 1000; // 1 min
 
   const timestamps = (generalApiTracker.get(ip) || []).filter(t => now - t < windowMs);
-  if (timestamps.length >= 120) {
+  if (timestamps.length >= 300) {
     return res.status(429).json({
       error: 'Rate limit exceeded: Too many rapid requests. Please slow down.'
     });

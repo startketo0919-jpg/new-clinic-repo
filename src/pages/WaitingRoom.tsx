@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useClinic } from '../context/ClinicContext';
-import { Activity, Volume2, VolumeX, Radio } from 'lucide-react';
+import { Activity, Volume2, VolumeX } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 export default function WaitingRoom() {
@@ -9,7 +9,13 @@ export default function WaitingRoom() {
   const [lastCalled, setLastCalled] = useState<string | null>(null);
 
   const currentPatient = state.patients.find(p => p.id === state.currentPatientId);
-  const waitingPatients = state.patients.filter(p => p.status === 'Waiting').slice(0, 5); // Show next 5
+  
+  // All waiting patients & accurate count
+  const allWaitingPatients = state.patients.filter(p => p.status === 'Waiting');
+  const totalWaiting = allWaitingPatients.length;
+  const displayedPatients = allWaitingPatients.slice(0, 5); // Display top 5 on screen
+  const remainingCount = Math.max(0, totalWaiting - displayedPatients.length);
+  const remainingPatients = allWaitingPatients.slice(5);
 
   // 1. Lock document and body scrolling so TV web browsers NEVER show scrollbars or scroll
   useEffect(() => {
@@ -23,15 +29,13 @@ export default function WaitingRoom() {
     };
   }, []);
 
-  // 2. High-reliability live sync polling every 2.5 seconds
-  // Ensures TV page stays 100% updated even if SSE drops, network lags, or TV browser sleeps
+  // 2. High-reliability live sync polling every 4 seconds
   useEffect(() => {
-    // Initial fetch
     fetchState();
 
     const syncTimer = setInterval(() => {
       fetchState();
-    }, 2500);
+    }, 4000);
 
     const onWake = () => {
       if (document.visibilityState === 'visible') {
@@ -61,8 +65,8 @@ export default function WaitingRoom() {
             const osc = ctx.createOscillator();
             const gainNode = ctx.createGain();
             osc.type = 'sine';
-            osc.frequency.setValueAtTime(880, ctx.currentTime); // A5
-            osc.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.5); // Drop to A4
+            osc.frequency.setValueAtTime(880, ctx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.5);
             gainNode.gain.setValueAtTime(0.15, ctx.currentTime);
             gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
             osc.connect(gainNode);
@@ -159,23 +163,23 @@ export default function WaitingRoom() {
         </div>
 
         {/* Right Column: Next in Line */}
-        <div className="flex flex-col h-full min-h-0 justify-start">
-          {/* Section Heading */}
-          <div className="shrink-0 flex items-center justify-between pb-3 mb-3 border-b border-slate-700">
+        <div className="flex flex-col h-full min-h-0 justify-between">
+          {/* Section Heading with accurate Total Count */}
+          <div className="shrink-0 flex items-center justify-between pb-3 mb-2 border-b border-slate-700">
             <h2 className="text-2xl md:text-3xl font-bold text-slate-400 uppercase tracking-widest">
               Next in Line
             </h2>
-            {waitingPatients.length > 0 && (
+            {totalWaiting > 0 && (
               <span className="text-xs md:text-sm font-semibold px-3 py-1 rounded-full bg-slate-800 border border-slate-700 text-teal-300">
-                {waitingPatients.length} Waiting
+                {totalWaiting} Waiting
               </span>
             )}
           </div>
 
-          {/* Queue List (Native Flexbox without Framer Motion transforms) */}
-          <div className="flex-1 min-h-0 flex flex-col justify-start gap-2.5 overflow-hidden">
-            {waitingPatients.length > 0 ? (
-              waitingPatients.map((patient, index) => {
+          {/* Queue List (Displays Top 5 Cards) */}
+          <div className="flex-1 min-h-0 flex flex-col justify-start gap-2 overflow-hidden">
+            {displayedPatients.length > 0 ? (
+              displayedPatients.map((patient, index) => {
                 const isEmergency = patient.priority === 'Emergency';
                 const isSenior = patient.priority === 'Senior Citizen';
                 const hasPriority = isEmergency || isSenior;
@@ -184,7 +188,7 @@ export default function WaitingRoom() {
                   <div
                     key={patient.id}
                     className={cn(
-                      "flex-1 min-h-0 max-h-[96px] flex items-center justify-between px-5 py-2.5 rounded-2xl border transition-colors box-border",
+                      "flex-1 min-h-0 max-h-[90px] flex items-center justify-between px-5 py-2 rounded-2xl border transition-colors box-border",
                       index === 0
                         ? "bg-slate-800 border-teal-500/70 shadow-lg ring-1 ring-teal-500/30"
                         : "bg-slate-800/60 border-slate-700/80"
@@ -244,6 +248,23 @@ export default function WaitingRoom() {
               </div>
             )}
           </div>
+
+          {/* Bottom Banner: Shows remaining patients beyond top 5 */}
+          {remainingCount > 0 && (
+            <div className="shrink-0 mt-2 px-4 py-2 rounded-xl bg-slate-800/95 border border-teal-500/30 flex items-center justify-between text-xs md:text-sm shadow-md">
+              <div className="flex items-center gap-2 overflow-hidden min-w-0">
+                <span className="font-bold text-teal-400 shrink-0">
+                  +{remainingCount} more:
+                </span>
+                <span className="text-slate-300 font-mono tracking-wider truncate">
+                  {remainingPatients.map(p => p.token).join(', ')}
+                </span>
+              </div>
+              <span className="text-slate-400 font-medium text-xs shrink-0 ml-3">
+                Total: <strong className="text-white">{totalWaiting}</strong>
+              </span>
+            </div>
+          )}
         </div>
 
       </main>
@@ -251,6 +272,16 @@ export default function WaitingRoom() {
       {/* Footer Ticker */}
       <footer className="shrink-0 h-10 md:h-12 bg-teal-900 border-t border-teal-800 flex items-center overflow-hidden">
         <div className="whitespace-nowrap flex animate-marquee gap-8 items-center text-teal-200 font-medium text-sm md:text-base">
+          {totalWaiting > 0 && (
+            <span className="text-white font-bold bg-teal-800/80 px-3 py-0.5 rounded-full border border-teal-600">
+              • Total Patients Waiting: {totalWaiting}
+            </span>
+          )}
+          {remainingCount > 0 && (
+            <span className="text-amber-300 font-semibold">
+              • Next tokens in queue: {remainingPatients.map(p => p.token).join(', ')}
+            </span>
+          )}
           <span>• Welcome to the Clinic</span>
           <span>• Clinic Timings: Morning : 9:30am to 2:00pm, Evening : 5:00pm to 8:00pm (Wednesday Close)</span>
           <span>• Please keep your phone on silent</span>
