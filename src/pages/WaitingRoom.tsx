@@ -1,18 +1,17 @@
 import React, { useEffect, useState } from 'react';
 import { useClinic } from '../context/ClinicContext';
-import { Activity, Volume2, VolumeX } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { Activity, Volume2, VolumeX, Radio } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 export default function WaitingRoom() {
-  const { state } = useClinic();
+  const { state, fetchState } = useClinic();
   const [audioEnabled, setAudioEnabled] = useState(false);
   const [lastCalled, setLastCalled] = useState<string | null>(null);
 
   const currentPatient = state.patients.find(p => p.id === state.currentPatientId);
   const waitingPatients = state.patients.filter(p => p.status === 'Waiting').slice(0, 5); // Show next 5
 
-  // Lock body/html scroll so TV browsers never scroll or display scrollbars
+  // 1. Lock document and body scrolling so TV web browsers NEVER show scrollbars or scroll
   useEffect(() => {
     const origHtmlOverflow = document.documentElement.style.overflow;
     const origBodyOverflow = document.body.style.overflow;
@@ -24,27 +23,53 @@ export default function WaitingRoom() {
     };
   }, []);
 
+  // 2. High-reliability live sync polling every 2.5 seconds
+  // Ensures TV page stays 100% updated even if SSE drops, network lags, or TV browser sleeps
+  useEffect(() => {
+    // Initial fetch
+    fetchState();
+
+    const syncTimer = setInterval(() => {
+      fetchState();
+    }, 2500);
+
+    const onWake = () => {
+      if (document.visibilityState === 'visible') {
+        fetchState();
+      }
+    };
+
+    window.addEventListener('focus', fetchState);
+    document.addEventListener('visibilitychange', onWake);
+
+    return () => {
+      clearInterval(syncTimer);
+      window.removeEventListener('focus', fetchState);
+      document.removeEventListener('visibilitychange', onWake);
+    };
+  }, [fetchState]);
+
+  // 3. Audio chime notification when a new token is called
   useEffect(() => {
     if (currentPatient && currentPatient.id !== lastCalled) {
       setLastCalled(currentPatient.id);
       if (audioEnabled) {
-        // Simple chime mock
         try {
-          const ctx = new window.AudioContext();
-          const osc = ctx.createOscillator();
-          const gainNode = ctx.createGain();
-          osc.type = 'sine';
-          osc.frequency.setValueAtTime(880, ctx.currentTime); // A5
-          osc.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.5); // Drop to A4
-          
-          gainNode.gain.setValueAtTime(0.1, ctx.currentTime);
-          gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
-          
-          osc.connect(gainNode);
-          gainNode.connect(ctx.destination);
-          
-          osc.start();
-          osc.stop(ctx.currentTime + 0.5);
+          const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+          if (AudioContextClass) {
+            const ctx = new AudioContextClass();
+            const osc = ctx.createOscillator();
+            const gainNode = ctx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(880, ctx.currentTime); // A5
+            osc.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.5); // Drop to A4
+            gainNode.gain.setValueAtTime(0.15, ctx.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+            osc.connect(gainNode);
+            gainNode.connect(ctx.destination);
+            osc.start();
+            osc.stop(ctx.currentTime + 0.5);
+          }
         } catch (e) {
           console.error("Audio playback failed", e);
         }
@@ -53,148 +78,193 @@ export default function WaitingRoom() {
   }, [currentPatient, lastCalled, audioEnabled]);
 
   return (
-    <div className="fixed inset-0 h-screen h-[100dvh] w-screen max-w-full overflow-hidden bg-slate-900 text-white flex flex-col font-sans select-none">
+    <div className="fixed inset-0 h-screen w-screen max-w-full max-h-full overflow-hidden bg-slate-900 text-white flex flex-col font-sans select-none box-border">
+      
       {/* Header */}
-      <header className="shrink-0 px-6 py-4 flex justify-between items-center bg-slate-800 border-b border-slate-700">
-        <div className="flex items-center gap-4">
-          <Activity className="w-9 h-9 text-teal-400 shrink-0" />
-          <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Krishna Homoeopathic Clinic</h1>
+      <header className="shrink-0 h-16 md:h-20 px-6 md:px-8 flex justify-between items-center bg-slate-800 border-b border-slate-700 z-10">
+        <div className="flex items-center gap-4 min-w-0">
+          <Activity className="w-8 h-8 md:w-9 md:h-9 text-teal-400 shrink-0" />
+          <h1 className="text-xl md:text-2xl lg:text-3xl font-bold tracking-tight truncate">
+            {state.settings?.clinicName || 'Krishna Homoeopathic Clinic'}
+          </h1>
         </div>
-        <button 
-          type="button"
-          onClick={() => setAudioEnabled(!audioEnabled)}
-          className="p-3 rounded-full bg-slate-700 hover:bg-slate-600 transition-colors text-slate-300 shrink-0"
-        >
-          {audioEnabled ? <Volume2 className="w-6 h-6" /> : <VolumeX className="w-6 h-6" />}
-        </button>
+
+        <div className="flex items-center gap-4 shrink-0">
+          {/* Live pulse indicator */}
+          <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-slate-900/60 border border-slate-700">
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+            <span className="text-xs font-semibold text-slate-300 tracking-wider">LIVE</span>
+          </div>
+
+          {/* Audio toggle button */}
+          <button 
+            type="button"
+            onClick={() => setAudioEnabled(!audioEnabled)}
+            className="p-2.5 md:p-3 rounded-full bg-slate-700 hover:bg-slate-600 transition-colors text-slate-300 focus:outline-none"
+            title={audioEnabled ? "Mute Chime" : "Enable Chime"}
+          >
+            {audioEnabled ? <Volume2 className="w-5 h-5 md:w-6 md:h-6" /> : <VolumeX className="w-5 h-5 md:w-6 md:h-6" />}
+          </button>
+        </div>
       </header>
 
-      {/* Main: ALWAYS 2 columns side-by-side on TV, exactly like Laptop */}
-      <main className="flex-1 min-h-0 grid grid-cols-2 p-6 md:p-8 gap-8 md:gap-12 items-center max-w-[1600px] w-full mx-auto overflow-hidden">
+      {/* Main Content: Guaranteed 2-Column Side-by-Side TV Layout (Zero Scrolling, Zero Overlap) */}
+      <main className="flex-1 min-h-0 w-full max-w-[1600px] mx-auto px-6 py-4 md:px-8 md:py-6 grid grid-cols-2 gap-8 md:gap-12 items-stretch overflow-hidden">
         
-        {/* Now Serving */}
-        <div className="flex flex-col items-center justify-center h-full min-h-0">
-          <h2 className="shrink-0 text-2xl md:text-3xl font-semibold text-slate-400 uppercase tracking-widest mb-6 md:mb-8">
-            Now Serving
-          </h2>
-          <div className="flex-1 min-h-0 flex items-center justify-center w-full">
-            <AnimatePresence mode="popLayout">
-              {currentPatient ? (
-                <motion.div 
-                  key={currentPatient.id}
-                  initial={{ opacity: 0, scale: 0.8, y: 50 }}
-                  animate={{ opacity: 1, scale: 1, y: 0 }}
-                  exit={{ opacity: 0, scale: 1.1, y: -50 }}
-                  transition={{ type: "spring", bounce: 0.4, duration: 0.8 }}
-                  className="bg-teal-500 rounded-3xl md:rounded-[3rem] p-6 md:p-10 lg:p-12 shadow-[0_0_100px_rgba(20,184,166,0.3)] border-4 border-teal-400 text-center w-full max-w-md lg:max-w-lg relative overflow-hidden"
-                >
-                  <div className="absolute inset-0 bg-gradient-to-br from-white/20 to-transparent"></div>
-                  <div className="relative z-10">
-                    <p className="text-teal-50 text-xl md:text-2xl font-medium mb-2 md:mb-4">Token Number</p>
-                    <p className="text-6xl md:text-7xl lg:text-8xl font-black text-white tracking-tighter mb-4 md:mb-6 drop-shadow-lg leading-none">
-                      {currentPatient.token}
+        {/* Left Column: Now Serving */}
+        <div className="flex flex-col h-full min-h-0 justify-start items-center">
+          {/* Section Heading */}
+          <div className="shrink-0 w-full flex items-center justify-center pb-3 mb-3 border-b border-slate-700/60">
+            <h2 className="text-2xl md:text-3xl font-bold text-slate-400 uppercase tracking-widest text-center">
+              Now Serving
+            </h2>
+          </div>
+
+          {/* Card Container (strictly isolated to prevent overlap) */}
+          <div className="flex-1 min-h-0 w-full flex items-center justify-center p-2">
+            {currentPatient ? (
+              <div 
+                key={currentPatient.id}
+                className="w-full max-w-md bg-gradient-to-br from-teal-500 to-teal-600 rounded-3xl p-6 md:p-8 shadow-[0_0_80px_rgba(20,184,166,0.35)] border-4 border-teal-400 text-center relative overflow-hidden flex flex-col items-center justify-center"
+              >
+                <div className="absolute inset-0 bg-gradient-to-br from-white/20 to-transparent pointer-events-none"></div>
+                <div className="relative z-10 w-full flex flex-col items-center">
+                  <p className="text-teal-50 text-lg md:text-xl font-medium mb-1">
+                    Token Number
+                  </p>
+                  <p className="text-6xl md:text-7xl lg:text-8xl font-black text-white tracking-tight my-2 drop-shadow-md leading-none">
+                    {currentPatient.token}
+                  </p>
+                  <div className="inline-block bg-teal-950/40 backdrop-blur-sm px-6 py-2 rounded-full border border-teal-300/40 my-2 max-w-full">
+                    <p className="text-lg md:text-xl font-bold text-teal-50 truncate">
+                      {state.settings?.doctorName || 'Dr.Sunil Kumar (B.H.M.S)'}
                     </p>
-                    <div className="inline-block bg-teal-900/50 backdrop-blur-md px-6 py-2 md:px-8 md:py-3 rounded-full border border-teal-400/50">
-                      <p className="text-lg md:text-2xl font-bold text-teal-50">Dr.Sunil Kumar (B.H.M.S)</p>
-                    </div>
-                    <div className="mt-3 md:mt-4 text-teal-100 font-semibold text-base md:text-xl uppercase tracking-wider">
-                      {currentPatient.visitType}
-                    </div>
                   </div>
-                </motion.div>
-              ) : (
-                <motion.div 
-                  key="none"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  className="text-center p-8 md:p-12"
-                >
-                  <p className="text-4xl md:text-5xl lg:text-6xl font-light text-slate-600">Please wait to be called</p>
-                </motion.div>
-              )}
-            </AnimatePresence>
+                  <div className="mt-2 text-teal-100 font-bold text-base md:text-lg uppercase tracking-wider">
+                    {currentPatient.visitType}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="text-center p-8 flex flex-col items-center justify-center">
+                <div className="w-16 h-16 rounded-full bg-slate-800/90 border border-slate-700 flex items-center justify-center mb-4 text-slate-500">
+                  <Activity className="w-8 h-8 animate-pulse text-teal-400/70" />
+                </div>
+                <p className="text-3xl md:text-4xl font-light text-slate-500 tracking-wide">
+                  Please wait to be called
+                </p>
+              </div>
+            )}
           </div>
         </div>
 
-        {/* Next in Line */}
-        <div className="flex flex-col h-full min-h-0 justify-center">
-          <h2 className="shrink-0 text-2xl md:text-3xl font-semibold text-slate-400 uppercase tracking-widest mb-4 md:mb-6 border-b border-slate-700 pb-3 md:pb-4">
-            Next in Line
-          </h2>
-          <div className="flex-1 min-h-0 flex flex-col justify-center gap-3 md:gap-4 overflow-hidden">
-            <AnimatePresence>
-              {waitingPatients.length > 0 ? (
-                waitingPatients.map((patient, index) => (
-                  <motion.div
+        {/* Right Column: Next in Line */}
+        <div className="flex flex-col h-full min-h-0 justify-start">
+          {/* Section Heading */}
+          <div className="shrink-0 flex items-center justify-between pb-3 mb-3 border-b border-slate-700">
+            <h2 className="text-2xl md:text-3xl font-bold text-slate-400 uppercase tracking-widest">
+              Next in Line
+            </h2>
+            {waitingPatients.length > 0 && (
+              <span className="text-xs md:text-sm font-semibold px-3 py-1 rounded-full bg-slate-800 border border-slate-700 text-teal-300">
+                {waitingPatients.length} Waiting
+              </span>
+            )}
+          </div>
+
+          {/* Queue List (Native Flexbox without Framer Motion transforms) */}
+          <div className="flex-1 min-h-0 flex flex-col justify-start gap-2.5 overflow-hidden">
+            {waitingPatients.length > 0 ? (
+              waitingPatients.map((patient, index) => {
+                const isEmergency = patient.priority === 'Emergency';
+                const isSenior = patient.priority === 'Senior Citizen';
+                const hasPriority = isEmergency || isSenior;
+
+                return (
+                  <div
                     key={patient.id}
-                    layout
-                    initial={{ opacity: 0, x: 50 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    exit={{ opacity: 0, x: -50 }}
-                    transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
                     className={cn(
-                      "flex-1 min-h-0 max-h-[100px] flex items-center justify-between px-6 py-3 rounded-2xl md:rounded-3xl border transition-all",
-                      index === 0 ? "bg-slate-800 border-slate-600 shadow-xl" : "bg-slate-800/50 border-slate-700"
+                      "flex-1 min-h-0 max-h-[96px] flex items-center justify-between px-5 py-2.5 rounded-2xl border transition-colors box-border",
+                      index === 0
+                        ? "bg-slate-800 border-teal-500/70 shadow-lg ring-1 ring-teal-500/30"
+                        : "bg-slate-800/60 border-slate-700/80"
                     )}
                   >
-                    <div className="flex flex-col justify-center min-w-0">
-                      <div className="flex items-center gap-4 md:gap-6">
-                        <div className={cn(
-                          "font-black tracking-tighter leading-none",
-                          index === 0 ? "text-4xl md:text-5xl lg:text-6xl text-white" : "text-3xl md:text-4xl text-slate-400"
+                    {/* Left: Token and metadata */}
+                    <div className="flex flex-col justify-center min-w-0 pr-3">
+                      <div className="flex items-center gap-3">
+                        <span className={cn(
+                          "font-black tracking-tight leading-none",
+                          index === 0 ? "text-3xl md:text-4xl text-white" : "text-2xl md:text-3xl text-slate-200"
                         )}>
                           {patient.token}
-                        </div>
-                        {patient.priority !== 'Normal' && (
+                        </span>
+
+                        {hasPriority && (
                           <span className={cn(
-                            "px-3 py-1 rounded-full text-xs md:text-sm font-bold uppercase tracking-wider shrink-0",
-                            patient.priority === 'Emergency' ? 'bg-rose-500/20 text-rose-400' : 'bg-amber-500/20 text-amber-400'
+                            "px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider shrink-0",
+                            isEmergency
+                              ? "bg-rose-500/20 text-rose-300 border border-rose-500/40"
+                              : "bg-amber-500/20 text-amber-300 border border-amber-500/40"
                           )}>
                             {patient.priority}
                           </span>
                         )}
                       </div>
+
                       <div className={cn(
-                        "mt-1 uppercase tracking-widest font-semibold truncate",
-                        index === 0 ? "text-slate-300 text-sm md:text-base lg:text-lg" : "text-slate-500 text-xs md:text-sm"
+                        "mt-1 uppercase tracking-wider font-semibold text-xs truncate",
+                        index === 0 ? "text-teal-300" : "text-slate-400"
                       )}>
                         {patient.visitType}
                       </div>
                     </div>
-                    {index === 0 && (
-                      <div className="text-teal-400 font-medium text-sm md:text-lg uppercase tracking-wider animate-pulse shrink-0 ml-4">
+
+                    {/* Right: Get Ready tag or Queue Number */}
+                    {index === 0 ? (
+                      <div className="text-teal-300 font-bold text-xs md:text-sm uppercase tracking-wider animate-pulse shrink-0 px-3 py-1.5 rounded-xl bg-teal-500/20 border border-teal-400/40">
                         Get Ready
                       </div>
+                    ) : (
+                      <div className="text-slate-500 text-xs font-semibold uppercase tracking-wider shrink-0">
+                        #{index + 1}
+                      </div>
                     )}
-                  </motion.div>
-                ))
-              ) : (
-                <div className="text-slate-500 text-xl md:text-2xl italic p-6 md:p-8 bg-slate-800/30 rounded-3xl border border-slate-700/50 text-center">
+                  </div>
+                );
+              })
+            ) : (
+              <div className="flex-1 flex flex-col items-center justify-center p-6 bg-slate-800/30 rounded-2xl border border-slate-700/40 text-center">
+                <p className="text-slate-500 text-xl italic">
                   No patients waiting
-                </div>
-              )}
-            </AnimatePresence>
+                </p>
+                <p className="text-slate-600 text-sm mt-1">
+                  New check-ins will appear here automatically
+                </p>
+              </div>
+            )}
           </div>
         </div>
 
       </main>
       
       {/* Footer Ticker */}
-      <footer className="shrink-0 bg-teal-900 border-t border-teal-800 py-3 overflow-hidden">
-        <div className="whitespace-nowrap flex animate-marquee gap-8 items-center text-teal-200 font-medium text-base md:text-lg">
+      <footer className="shrink-0 h-10 md:h-12 bg-teal-900 border-t border-teal-800 flex items-center overflow-hidden">
+        <div className="whitespace-nowrap flex animate-marquee gap-8 items-center text-teal-200 font-medium text-sm md:text-base">
           <span>• Welcome to the Clinic</span>
           <span>• Clinic Timings: Morning : 9:30am to 2:00pm, Evening : 5:00pm to 8:00pm (Wednesday Close)</span>
           <span>• Please keep your phone on silent</span>
           <span>• Have your previous reports ready</span>
         </div>
       </footer>
+
       <style>{`
         @keyframes marquee {
           0% { transform: translateX(100%); }
           100% { transform: translateX(-100%); }
         }
         .animate-marquee {
-          animation: marquee 30s linear infinite;
+          animation: marquee 35s linear infinite;
         }
       `}</style>
     </div>
