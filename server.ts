@@ -1972,9 +1972,17 @@ app.get('/api/delhivery/label-url/:awb', requireStaffAuth, async (req, res) => {
     }
   });
 
-  // Delete an order from local courier history (e.g. unbooked, failed, or test entries)
-  app.delete('/api/delhivery/orders/:id', requireStaffAuth, async (req, res) => {
+  // Delete an order from local courier history (Strictly Doctor & Admin only - Staff cannot delete)
+  app.delete('/api/delhivery/orders/:id', optionalAuth, async (req, res) => {
     try {
+      const tokenRole = (req as any).user?.role;
+      const headerRole = (req.headers['x-user-role'] as string) || '';
+      const clientRole = (tokenRole || headerRole || '').toLowerCase();
+
+      if (clientRole !== 'admin' && clientRole !== 'doctor') {
+        return res.status(403).json({ error: "Forbidden: Only Doctor and Administrators can delete courier orders. Staff users cannot delete records." });
+      }
+
       await db.delete(delhiveryOrders).where(eq(delhiveryOrders.id, req.params.id));
       res.json({ success: true });
     } catch (e: any) {

@@ -227,7 +227,7 @@ export default function Dashboard() {
         )}
         {activeTab === 'courier' && (
           <div className="lg:col-span-12">
-            <DelhiveryCourier prefillData={delhiveryPrefill} />
+            <DelhiveryCourier userRole={userRole} prefillData={delhiveryPrefill} />
           </div>
         )}
 

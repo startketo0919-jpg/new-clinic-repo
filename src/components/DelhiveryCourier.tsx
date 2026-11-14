@@ -4,6 +4,7 @@ import { useClinic } from '../context/ClinicContext';
 import LabelCropModal from './LabelCropModal';
 
 interface DelhiveryCourierProps {
+  userRole?: string | null;
   prefillData?: {
     consigneeName: string;
     consigneePhone: string;
@@ -12,8 +13,10 @@ interface DelhiveryCourierProps {
   } | null;
 }
 
-export default function DelhiveryCourier({ prefillData }: DelhiveryCourierProps = {}) {
+export default function DelhiveryCourier({ userRole, prefillData }: DelhiveryCourierProps = {}) {
   const { state } = useClinic();
+  const effectiveRole = (userRole || sessionStorage.getItem('userRole') || '').toLowerCase();
+  const isDoctorOrAdmin = effectiveRole === 'admin' || effectiveRole === 'doctor';
   const [activeTab, setActiveTab] = useState<'new_order' | 'pickup' | 'manage' | 'history'>('new_order');
   
   // New Order State
@@ -335,13 +338,22 @@ export default function DelhiveryCourier({ prefillData }: DelhiveryCourierProps 
   };
 
   const handleDeleteOrder = async (id: string, awbOrOrder: string) => {
-    if (!window.confirm(`Are you sure you want to delete order "${awbOrOrder}" from local courier history?`)) {
+    if (!isDoctorOrAdmin) {
+      alert("Permission Denied: Only Doctor and Admin can delete courier orders. Staff users cannot delete records.");
+      return;
+    }
+    if (!window.confirm(`Are you sure you want to permanently delete order "${awbOrOrder}" from local courier history?`)) {
       return;
     }
     setDeletingOrderId(id);
     try {
+      const token = sessionStorage.getItem('staffAuthToken') || '';
       const res = await fetch(`/api/delhivery/orders/${encodeURIComponent(id)}`, {
-        method: 'DELETE'
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'x-user-role': effectiveRole
+        }
       });
       setDeletingOrderId(null);
       if (res.ok) {
@@ -1563,16 +1575,18 @@ export default function DelhiveryCourier({ prefillData }: DelhiveryCourierProps 
                                <span>Print Label</span>
                              </button>
 
-                             {/* Delete Order from Local History */}
-                             <button 
-                               type="button"
-                               onClick={() => handleDeleteOrder(order.id, order.awb || order.orderId)}
-                               disabled={deletingOrderId === order.id}
-                               className="inline-flex items-center p-2 text-rose-500 hover:text-white hover:bg-rose-600 rounded-lg transition-colors border border-rose-200 bg-rose-50/50 shadow-2xs"
-                               title="Delete order from history"
-                             >
-                               <Trash2 className="w-3.5 h-3.5" />
-                             </button>
+                             {/* Delete Order from Local History (Doctor & Admin Only) */}
+                             {isDoctorOrAdmin && (
+                               <button 
+                                 type="button"
+                                 onClick={() => handleDeleteOrder(order.id, order.awb || order.orderId)}
+                                 disabled={deletingOrderId === order.id}
+                                 className="inline-flex items-center p-2 text-rose-500 hover:text-white hover:bg-rose-600 rounded-lg transition-colors border border-rose-200 bg-rose-50/50 shadow-2xs"
+                                 title="Delete order from history (Admin / Doctor only)"
+                               >
+                                 <Trash2 className="w-3.5 h-3.5" />
+                               </button>
+                             )}
                            </div>
                          </td>
                        </tr>
