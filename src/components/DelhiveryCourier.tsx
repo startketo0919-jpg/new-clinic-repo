@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Package, Truck, FileText, Search, Plus, Trash2, CheckCircle2, Download, XCircle, Copy, AlertCircle, Clock, ChevronDown, ChevronUp, RefreshCw, MessageSquare, Phone, Send, Crop, Printer, ExternalLink } from 'lucide-react';
+import { Package, Truck, FileText, Search, Plus, Trash2, CheckCircle2, Download, XCircle, Copy, AlertCircle, Clock, ChevronDown, ChevronUp, RefreshCw, MessageSquare, Phone, Send, Crop, Printer, ExternalLink, X, AlertTriangle } from 'lucide-react';
 import { useClinic } from '../context/ClinicContext';
 import LabelCropModal from './LabelCropModal';
 
@@ -59,6 +59,16 @@ export default function DelhiveryCourier({ prefillData }: DelhiveryCourierProps 
   const [isFetchingRates, setIsFetchingRates] = useState(false);
   const [isCreatingOrder, setIsCreatingOrder] = useState(false);
   const [createdAwb, setCreatedAwb] = useState<string | null>(null);
+  const [bookingError, setBookingError] = useState<string | null>(null);
+  const [deletingOrderId, setDeletingOrderId] = useState<string | null>(null);
+  const [pincodeStatus, setPincodeStatus] = useState<{
+    checking: boolean;
+    serviceable?: boolean;
+    remarks?: string;
+    reason?: string;
+    city?: string;
+    state?: string;
+  } | null>(null);
 
   // Pickup State
   const [pickupDate, setPickupDate] = useState(() => {
@@ -154,9 +164,64 @@ export default function DelhiveryCourier({ prefillData }: DelhiveryCourierProps 
     }
   }, [warehouses, warehouse]);
 
+  // Live Pincode Serviceability Check (Debounced)
+  useEffect(() => {
+    const pin = consigneePincode.trim();
+    if (pin.length !== 6 || !/^\d{6}$/.test(pin)) {
+      setPincodeStatus(null);
+      return;
+    }
+
+    let isMounted = true;
+    setPincodeStatus({ checking: true });
+
+    const timeout = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/delhivery/check-pincode/${encodeURIComponent(pin)}`);
+        const data = await res.json();
+        if (isMounted) {
+          if (res.ok && data.serviceable) {
+            setPincodeStatus({
+              checking: false,
+              serviceable: true,
+              city: data.city || data.district,
+              state: data.state,
+              remarks: data.remarks
+            });
+            // Auto-fill city/state if empty
+            if (data.city && !consigneeCity) setConsigneeCity(data.city);
+            if (data.state && !consigneeState) setConsigneeState(data.state);
+          } else {
+            setPincodeStatus({
+              checking: false,
+              serviceable: false,
+              remarks: data.remarks || '',
+              reason: data.error || data.reason || `Pincode ${pin} is unserviceable by Delhivery.`
+            });
+          }
+        }
+      } catch (err) {
+        if (isMounted) {
+          setPincodeStatus(null);
+        }
+      }
+    }, 450);
+
+    return () => {
+      isMounted = false;
+      clearTimeout(timeout);
+    };
+  }, [consigneePincode]);
+
   const fetchRates = async () => {
     if (!warehouse || !consigneePincode) return alert("Select warehouse and enter delivery pincode");
+    if (pincodeStatus && !pincodeStatus.checking && !pincodeStatus.serviceable) {
+      alert(`Cannot fetch rates:\n\n${pincodeStatus.reason || `Pincode ${consigneePincode} is not serviceable by Delhivery.`}`);
+      return;
+    }
+
     setIsFetchingRates(true);
+    setBookingError(null);
     try {
       const w = JSON.parse(warehouse);
       const res = await fetch('/api/delhivery/rates', {
@@ -165,6 +230,14 @@ export default function DelhiveryCourier({ prefillData }: DelhiveryCourierProps 
         body: JSON.stringify({ pickup_pincode: w.pincode, delivery_pincode: consigneePincode, weight })
       });
       const data = await res.json();
+      
+      if (!res.ok || data.serviceable === false || data.error) {
+        setIsFetchingRates(false);
+        const errMsg = data.error || `Destination pincode ${consigneePincode} is not serviceable by Delhivery.`;
+        setBookingError(errMsg);
+        alert(`Delhivery Serviceability Notice:\n\n${errMsg}`);
+        return;
+      }
       
       let expPrice = 0;
       let surPrice = 0;
@@ -185,10 +258,10 @@ export default function DelhiveryCourier({ prefillData }: DelhiveryCourierProps 
       
       setRates({ express: expPrice, surface: surPrice });
       setIsFetchingRates(false);
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
       setIsFetchingRates(false);
-      alert('Failed to fetch rates');
+      alert('Failed to fetch rates: ' + (e.message || 'Network error'));
     }
   };
 
@@ -196,7 +269,13 @@ export default function DelhiveryCourier({ prefillData }: DelhiveryCourierProps 
     if (!orderId || !consigneeName || !consigneePhone || !consigneeAddress || !consigneePincode || !warehouse) {
       return alert("Please fill all required fields");
     }
+    if (pincodeStatus && !pincodeStatus.checking && !pincodeStatus.serviceable) {
+      alert(`Cannot create order:\n\n${pincodeStatus.reason || `Delivery pincode ${consigneePincode} is not serviceable by Delhivery.`}\n\nPlease check the pincode or address.`);
+      return;
+    }
+
     setIsCreatingOrder(true);
+    setBookingError(null);
     try {
       const res = await fetch('/api/delhivery/create', {
         method: 'POST',
@@ -223,20 +302,57 @@ export default function DelhiveryCourier({ prefillData }: DelhiveryCourierProps 
       const data = await res.json();
       setIsCreatingOrder(false);
       
-      const pkg = data.packages?.[0];
-      const awb = pkg?.waybill || data.upload_wbn || data.waybill || null;
-      
-      if (awb || data.success || (pkg && pkg.status === 'Success')) {
-          setCreatedAwb(awb || 'Order Placed');
-          setOrderId(''); setConsigneeName(''); setConsigneePhone(''); setConsigneeAddress(''); setConsigneePincode(''); setConsigneeCity(''); setConsigneeState(''); setRates(null); setSelectedRate(null);
-          fetchHistory();
+      // STRICT CHECK: ONLY SHOW BOOKED COURIERS WITH SUCCESS MESSAGE!
+      // Must have success: true, booked: true, and a genuine waybill not starting with UPL
+      if (res.ok && data.success && data.booked && data.awb && !String(data.awb).toUpperCase().startsWith('UPL')) {
+        setBookingError(null);
+        setCreatedAwb(data.awb);
+        setOrderId(''); 
+        setConsigneeName(''); 
+        setConsigneePhone(''); 
+        setConsigneeAddress(''); 
+        setConsigneePincode(''); 
+        setConsigneeCity(''); 
+        setConsigneeState(''); 
+        setRates(null); 
+        setSelectedRate(null);
+        fetchHistory();
       } else {
-          const errMsg = (pkg?.remarks && pkg.remarks.length > 0) ? pkg.remarks.join(', ') : (data.error || data.rmk || JSON.stringify(data));
-          alert('Failed to create order: ' + errMsg);
+        // BOOKING FAILED - Extract exact remarks / error from Delhivery
+        const pkgRemarks = data.packages?.[0]?.remarks || data.remarks;
+        const remarksStr = Array.isArray(pkgRemarks) && pkgRemarks.length > 0 ? pkgRemarks.join('. ') : '';
+        const errMsg = data.error || remarksStr || data.rmk || 'Delhivery rejected this booking. No AWB was issued.';
+        
+        setBookingError(errMsg);
+        alert(`❌ Delhivery Booking Failed:\n\n${errMsg}\n\nNotice: Your order was NOT booked and no AWB was issued. Your input details have been preserved so you can resolve the issue.`);
       }
     } catch (e: any) {
       setIsCreatingOrder(false);
-      alert('Failed to create order: ' + (e.message || 'Network error'));
+      const netErr = e.message || 'Network error';
+      setBookingError(netErr);
+      alert('Failed to connect to courier server: ' + netErr);
+    }
+  };
+
+  const handleDeleteOrder = async (id: string, awbOrOrder: string) => {
+    if (!window.confirm(`Are you sure you want to delete order "${awbOrOrder}" from local courier history?`)) {
+      return;
+    }
+    setDeletingOrderId(id);
+    try {
+      const res = await fetch(`/api/delhivery/orders/${encodeURIComponent(id)}`, {
+        method: 'DELETE'
+      });
+      setDeletingOrderId(null);
+      if (res.ok) {
+        setHistory(prev => prev.filter(o => o.id !== id));
+      } else {
+        const d = await res.json();
+        alert(d.error || 'Failed to delete order.');
+      }
+    } catch (err: any) {
+      setDeletingOrderId(null);
+      alert('Error deleting order: ' + err.message);
     }
   };
 
@@ -495,6 +611,31 @@ export default function DelhiveryCourier({ prefillData }: DelhiveryCourierProps 
               </div>
             </div>
           ) : (
+          <div className="space-y-6">
+            {bookingError && (
+              <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl flex items-start justify-between gap-3 text-rose-800 text-sm shadow-xs animate-in fade-in duration-200">
+                <div className="flex items-start gap-3">
+                  <div className="p-2 bg-rose-100 rounded-xl text-rose-600 shrink-0 mt-0.5">
+                    <AlertCircle className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-rose-900 text-base">Delhivery Booking Failed</h4>
+                    <p className="text-xs text-rose-700 mt-1 leading-relaxed font-medium">{bookingError}</p>
+                    <p className="text-[11px] text-rose-500 mt-1.5">
+                      Notice: Your order was NOT booked and no AWB was issued. Your input details below have been preserved so you can resolve the issue.
+                    </p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setBookingError(null)} 
+                  className="p-1 text-rose-400 hover:text-rose-600 rounded-lg hover:bg-rose-100/50 transition-colors"
+                  title="Dismiss error message"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
             <div className="space-y-6">
               <div>
@@ -540,7 +681,40 @@ export default function DelhiveryCourier({ prefillData }: DelhiveryCourierProps 
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Pincode</label>
-                    <input type="text" value={consigneePincode} onChange={e => setConsigneePincode(e.target.value)} className="w-full px-3 py-2 border rounded-lg text-sm" />
+                    <input 
+                      type="text" 
+                      maxLength={6}
+                      placeholder="e.g. 110001"
+                      value={consigneePincode} 
+                      onChange={e => setConsigneePincode(e.target.value.replace(/\D/g, ''))} 
+                      className={`w-full px-3 py-2 border rounded-lg text-sm font-mono tracking-wide ${
+                        pincodeStatus && !pincodeStatus.checking && !pincodeStatus.serviceable
+                          ? 'border-rose-400 bg-rose-50/40 text-rose-900 focus:ring-rose-500'
+                          : pincodeStatus && !pincodeStatus.checking && pincodeStatus.serviceable
+                            ? 'border-emerald-400 bg-emerald-50/30 text-emerald-900 focus:ring-emerald-500'
+                            : 'border-slate-300'
+                      }`} 
+                    />
+                    
+                    {/* Live Pincode Serviceability Indicator */}
+                    {pincodeStatus?.checking && (
+                      <div className="flex items-center gap-1.5 text-[11px] text-slate-500 mt-1">
+                        <RefreshCw className="w-3 h-3 animate-spin text-slate-400" />
+                        <span>Checking Delhivery coverage...</span>
+                      </div>
+                    )}
+                    {pincodeStatus && !pincodeStatus.checking && !pincodeStatus.serviceable && (
+                      <div className="mt-1 p-1.5 bg-rose-50 border border-rose-200 rounded-lg text-[11px] font-semibold text-rose-700 flex items-start gap-1">
+                        <AlertCircle className="w-3.5 h-3.5 text-rose-500 shrink-0 mt-0.5" />
+                        <span>{pincodeStatus.reason || `Pincode ${consigneePincode} is unserviceable.`}</span>
+                      </div>
+                    )}
+                    {pincodeStatus && !pincodeStatus.checking && pincodeStatus.serviceable && (
+                      <div className="mt-1 text-[11px] font-semibold text-emerald-700 flex items-center gap-1">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                        <span>Serviceable {pincodeStatus.city ? `(${pincodeStatus.city})` : ''}</span>
+                      </div>
+                    )}
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-4 mb-2">
@@ -684,6 +858,7 @@ export default function DelhiveryCourier({ prefillData }: DelhiveryCourierProps 
                 )}
               </div>
             </div>
+          </div>
           </div>
           )
         )}
@@ -1286,9 +1461,18 @@ export default function DelhiveryCourier({ prefillData }: DelhiveryCourierProps 
                            {order.orderId}
                          </td>
                          <td className="px-4 py-4">
-                           <span className="font-mono text-xs font-bold text-indigo-600 bg-indigo-50 px-2 py-1 rounded-md border border-indigo-100 block w-max">
-                             {order.awb}
-                           </span>
+                           {order.awb && String(order.awb).toUpperCase().startsWith('UPL') ? (
+                             <div>
+                               <span className="font-mono text-xs font-bold text-rose-700 bg-rose-50 px-2 py-0.5 rounded border border-rose-200 block w-max">
+                                 {order.awb}
+                               </span>
+                               <span className="text-[10px] text-rose-500 font-semibold block mt-0.5">Upload Batch ID (Not Booked)</span>
+                             </div>
+                           ) : (
+                             <span className="font-mono text-xs font-bold text-indigo-600 bg-indigo-50 px-2 py-1 rounded-md border border-indigo-100 block w-max">
+                               {order.awb}
+                             </span>
+                           )}
                          </td>
                          <td className="px-4 py-4 text-xs text-slate-700">
                            <div className="font-semibold text-slate-900">{order.consigneeName}</div>
@@ -1304,13 +1488,19 @@ export default function DelhiveryCourier({ prefillData }: DelhiveryCourierProps 
                            </div>
                          </td>
                          <td className="px-4 py-4">
-                           <span className={`px-2.5 py-1 text-[11px] font-bold rounded-full inline-block ${
-                             order.status === 'Cancelled' 
-                               ? 'bg-rose-100 text-rose-700' 
-                               : 'bg-emerald-100 text-emerald-700'
-                           }`}>
-                             {order.status}
-                           </span>
+                           {order.awb && String(order.awb).toUpperCase().startsWith('UPL') ? (
+                             <span className="px-2.5 py-1 text-[11px] font-bold rounded-full inline-block bg-rose-100 text-rose-700">
+                               Unbooked / Failed
+                             </span>
+                           ) : (
+                             <span className={`px-2.5 py-1 text-[11px] font-bold rounded-full inline-block ${
+                               order.status === 'Cancelled' 
+                                 ? 'bg-rose-100 text-rose-700' 
+                                 : 'bg-emerald-100 text-emerald-700'
+                             }`}>
+                               {order.status}
+                             </span>
+                           )}
                          </td>
                          <td className="px-4 py-4 text-right whitespace-nowrap">
                            <div className="flex items-center justify-end gap-2">
@@ -1365,11 +1555,23 @@ export default function DelhiveryCourier({ prefillData }: DelhiveryCourierProps 
                              <button 
                                type="button"
                                onClick={() => openCropModal(order.awb)}
-                               className="inline-flex items-center gap-1.5 text-teal-700 hover:text-white hover:bg-teal-600 font-semibold text-xs border border-teal-200 px-3 py-1.5 rounded-lg bg-teal-50 transition-all shadow-2xs"
+                               disabled={String(order.awb).toUpperCase().startsWith('UPL')}
+                               className="inline-flex items-center gap-1.5 text-teal-700 hover:text-white hover:bg-teal-600 font-semibold text-xs border border-teal-200 px-3 py-1.5 rounded-lg bg-teal-50 transition-all shadow-2xs disabled:opacity-40"
                                title="Auto-crop and print thermal label"
                              >
                                <Printer className="w-3.5 h-3.5" />
                                <span>Print Label</span>
+                             </button>
+
+                             {/* Delete Order from Local History */}
+                             <button 
+                               type="button"
+                               onClick={() => handleDeleteOrder(order.id, order.awb || order.orderId)}
+                               disabled={deletingOrderId === order.id}
+                               className="inline-flex items-center p-2 text-rose-500 hover:text-white hover:bg-rose-600 rounded-lg transition-colors border border-rose-200 bg-rose-50/50 shadow-2xs"
+                               title="Delete order from history"
+                             >
+                               <Trash2 className="w-3.5 h-3.5" />
                              </button>
                            </div>
                          </td>

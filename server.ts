@@ -1114,6 +1114,83 @@ app.post('/api/whatsapp/templates', requireAdminAuth, async (req, res) => {
   });
 
 // Delhivery Courier Integration
+  // Helper to verify pincode serviceability against Delhivery API
+  const checkDelhiveryPincode = async (pincode: string, apiKey: string) => {
+    try {
+      const cleanPin = String(pincode || '').trim();
+      if (!cleanPin || cleanPin.length !== 6 || !/^\d{6}$/.test(cleanPin)) {
+        return { serviceable: false, reason: 'Please provide a valid 6-digit Indian delivery pincode.' };
+      }
+      const url = `https://track.delhivery.com/c/api/pin-codes/json/?filter_codes=${encodeURIComponent(cleanPin)}`;
+      const response = await fetch(url, {
+        headers: {
+          'Authorization': `Token ${apiKey.trim()}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      const data = await response.json();
+      const codeObj = data?.delivery_codes?.[0]?.postal_code;
+      if (!codeObj) {
+        return { 
+          serviceable: false, 
+          pincode: cleanPin,
+          reason: `Pincode ${cleanPin} is not recognized or not serviceable by Delhivery.` 
+        };
+      }
+      
+      const remarks = String(codeObj.remarks || '').trim();
+      // Check for embargo / unserviceable remarks (e.g. 203131 returns "Embargo")
+      if (remarks && (remarks.toLowerCase().includes('embargo') || remarks.toLowerCase().includes('not serviceable') || remarks.toLowerCase().includes('closed') || remarks.toLowerCase().includes('discontinued'))) {
+        return { 
+          serviceable: false, 
+          pincode: cleanPin,
+          remarks: remarks,
+          reason: `Pincode ${cleanPin} is currently unserviceable by Delhivery (${remarks}). Deliveries to this area are restricted.`,
+          details: codeObj
+        };
+      }
+
+      if (codeObj.pre_paid !== 'Y' && codeObj.cod !== 'Y') {
+        return {
+          serviceable: false,
+          pincode: cleanPin,
+          remarks: remarks || 'No delivery mode available',
+          reason: `Neither Prepaid nor COD delivery is available for pincode ${cleanPin}.`,
+          details: codeObj
+        };
+      }
+
+      return {
+        serviceable: true,
+        pincode: cleanPin,
+        remarks: remarks,
+        district: codeObj.district,
+        state: codeObj.state_code,
+        city: codeObj.city,
+        prepaid: codeObj.pre_paid === 'Y',
+        cod: codeObj.cod === 'Y',
+        details: codeObj
+      };
+    } catch (e: any) {
+      console.warn('[Delhivery] Pincode check warning:', e.message);
+      return { serviceable: true, warning: 'Pincode validation bypassed due to network timeout' };
+    }
+  };
+
+  // Dedicated Pincode Serviceability Check API
+  app.get('/api/delhivery/check-pincode/:pincode', requireStaffAuth, async (req, res) => {
+    try {
+      const dbSettings = await db.select().from(settings).where(eq(settings.id, "default")).limit(1);
+      const s = dbSettings[0];
+      if (!s || !s.delhiveryApiKey) return res.status(400).json({ error: 'Delhivery API Key not configured' });
+      
+      const result = await checkDelhiveryPincode(req.params.pincode, s.delhiveryApiKey);
+      res.json(result);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.post('/api/delhivery/rates', requireStaffAuth, async (req, res) => {
     try {
       const dbSettings = await db.select().from(settings).where(eq(settings.id, "default")).limit(1);
@@ -1122,8 +1199,18 @@ app.post('/api/whatsapp/templates', requireAdminAuth, async (req, res) => {
       
       const { pickup_pincode, delivery_pincode, weight } = req.body;
       
-      console.log('Using token:', s.delhiveryApiKey);
-      const getRate = async (mode) => {
+      // Verify delivery pincode serviceability first
+      const pinCheck = await checkDelhiveryPincode(delivery_pincode, s.delhiveryApiKey);
+      if (!pinCheck.serviceable) {
+        return res.status(400).json({ 
+          error: pinCheck.reason, 
+          serviceable: false, 
+          remarks: pinCheck.remarks,
+          pincode: delivery_pincode
+        });
+      }
+
+      const getRate = async (mode: string) => {
         const url = `https://track.delhivery.com/api/kinko/v1/invoice/charges/.json?md=${mode}&ss=Delivered&d_pin=${delivery_pincode}&o_pin=${pickup_pincode}&cgm=${weight}&pt=Pre-paid`;
         const response = await fetch(url, {
           headers: {
@@ -1135,8 +1222,8 @@ app.post('/api/whatsapp/templates', requireAdminAuth, async (req, res) => {
       };
       
       const [expressRes, surfaceRes] = await Promise.all([getRate('E'), getRate('S')]);
-      res.json({ express: expressRes, surface: surfaceRes });
-    } catch (e) {
+      res.json({ serviceable: true, pinDetails: pinCheck, express: expressRes, surface: surfaceRes });
+    } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
   });
@@ -1167,6 +1254,19 @@ app.post('/api/whatsapp/templates', requireAdminAuth, async (req, res) => {
         packageType
       } = req.body;
       
+      // 1. Verify delivery pincode serviceability before attempting creation
+      const pinCheck = await checkDelhiveryPincode(pincode, s.delhiveryApiKey);
+      if (!pinCheck.serviceable) {
+        console.warn(`[Delhivery] Order #${orderId} blocked: Pincode ${pincode} is not serviceable (${pinCheck.remarks || pinCheck.reason})`);
+        return res.status(400).json({
+          success: false,
+          booked: false,
+          error: pinCheck.reason || `Delivery pincode ${pincode} is not serviceable by Delhivery.`,
+          remarks: pinCheck.remarks,
+          pincode
+        });
+      }
+
       const totalAmount = items ? items.reduce((sum: number, item: any) => sum + Number(item.price || 0), 0) : 0;
       const productsDesc = items ? items.map((i: any) => i.name).filter(Boolean).join(', ') : '';
 
@@ -1180,8 +1280,8 @@ app.post('/api/whatsapp/templates', requireAdminAuth, async (req, res) => {
             name: String(name || ''),
             add: String(address || ''),
             pin: String(pincode || ''),
-            city: String(city || ''),
-            state: String(state || ''),
+            city: String(city || pinCheck.city || ''),
+            state: String(state || pinCheck.state || ''),
             country: 'India',
             phone: String(phone || ''),
             order: String(orderId || ''),
@@ -1230,66 +1330,101 @@ app.post('/api/whatsapp/templates', requireAdminAuth, async (req, res) => {
       });
       
       const data = await response.json();
+      console.log('[Delhivery CMU Response]:', JSON.stringify(data));
       
+      // Inspect package response
       const pkg = data.packages?.[0];
-      let awb = pkg?.waybill || data.upload_wbn || data.waybill || null;
-      if (!awb && data.packages && Array.isArray(data.packages) && data.packages.length > 0) {
-        awb = data.packages[0].waybill || data.packages[0].wbn || null;
-      }
+      const rawWaybill = pkg?.waybill || data.waybill || null;
+      // Real waybill is numeric (e.g. 1809309271072) and MUST NOT start with UPL (which is upload batch reference)
+      const isValidAwb = rawWaybill && typeof rawWaybill === 'string' && rawWaybill.trim().length > 0 && !rawWaybill.toUpperCase().startsWith('UPL');
+      const isPackageSuccess = pkg && (pkg.status === 'Success' || pkg.status === 'success');
+      const isBooked = Boolean(isPackageSuccess && isValidAwb);
       
-      // Save locally if created or waybill exists, without failing the request on DB conflict
-      if (awb || data.success || (pkg && pkg.status === 'Success')) {
-        try {
-          const recordId = awb ? String(awb) : `ORDER_${orderId}_${Date.now()}`;
-          const existing = await db.select().from(delhiveryOrders).where(eq(delhiveryOrders.id, recordId)).limit(1);
-          if (existing.length > 0) {
-            await db.update(delhiveryOrders).set({
-              orderId: String(orderId),
-              awb: awb ? String(awb) : null,
-              warehouse: warehouse || '',
-              consigneeName: name || '',
-              consigneePhone: phone || '',
-              consigneeAddress: address || '',
-              consigneePincode: String(pincode || ''),
-              weight: Number(weight) || 500,
-              length: Number(length) || 10,
-              width: Number(width) || 10,
-              height: Number(height) || 10,
-              paymentMode: paymentMode || 'Prepaid',
-              items: JSON.stringify(items || []),
-              status: 'Manifested'
-            }).where(eq(delhiveryOrders.id, recordId));
-          } else {
-            await db.insert(delhiveryOrders).values({
-              id: recordId,
-              orderId: String(orderId),
-              awb: awb ? String(awb) : null,
-              warehouse: warehouse || '',
-              consigneeName: name || '',
-              consigneePhone: phone || '',
-              consigneeAddress: address || '',
-              consigneePincode: String(pincode || ''),
-              weight: Number(weight) || 500,
-              length: Number(length) || 10,
-              width: Number(width) || 10,
-              height: Number(height) || 10,
-              paymentMode: paymentMode || 'Prepaid',
-              items: JSON.stringify(items || []),
-              status: 'Manifested'
-            });
-          }
-          console.log(`[Delhivery] Successfully saved order ${orderId} (AWB: ${awb}) to database.`);
-          notifyClients();
-        } catch (dbErr) {
-          console.error('Database write error for Delhivery order:', dbErr);
+      // If booking failed or no genuine waybill was generated by Delhivery
+      if (!isBooked) {
+        let errorReason = '';
+        if (pkg?.remarks && Array.isArray(pkg.remarks) && pkg.remarks.length > 0) {
+          errorReason = pkg.remarks.filter(Boolean).join('. ');
+        } else if (data.rmk) {
+          errorReason = String(data.rmk);
+        } else if (data.error && typeof data.error === 'string') {
+          errorReason = data.error;
+        } else if (pkg?.status && pkg.status !== 'Success') {
+          errorReason = `Delhivery package status: ${pkg.status}`;
+        } else {
+          errorReason = 'Delhivery rejected the booking. No valid tracking waybill was generated.';
         }
-      } else {
-        console.warn('[Delhivery] Order creation did not return AWB or success:', data);
+
+        console.warn(`[Delhivery] Booking rejected for Order #${orderId}: ${errorReason}`);
+        return res.status(400).json({
+          success: false,
+          booked: false,
+          error: errorReason,
+          packageStatus: pkg?.status || 'Failed',
+          remarks: pkg?.remarks || [],
+          uploadBatchId: data.upload_wbn || null,
+          details: data
+        });
+      }
+
+      // GENUINELY BOOKED COURIER:
+      const awb = String(rawWaybill).trim();
+      try {
+        const recordId = awb;
+        const existing = await db.select().from(delhiveryOrders).where(eq(delhiveryOrders.id, recordId)).limit(1);
+        if (existing.length > 0) {
+          await db.update(delhiveryOrders).set({
+            orderId: String(orderId),
+            awb: awb,
+            warehouse: warehouse || '',
+            consigneeName: name || '',
+            consigneePhone: phone || '',
+            consigneeAddress: address || '',
+            consigneePincode: String(pincode || ''),
+            weight: Number(weight) || 500,
+            length: Number(length) || 10,
+            width: Number(width) || 10,
+            height: Number(height) || 10,
+            paymentMode: paymentMode || 'Prepaid',
+            items: JSON.stringify(items || []),
+            status: 'Manifested'
+          }).where(eq(delhiveryOrders.id, recordId));
+        } else {
+          await db.insert(delhiveryOrders).values({
+            id: recordId,
+            orderId: String(orderId),
+            awb: awb,
+            warehouse: warehouse || '',
+            consigneeName: name || '',
+            consigneePhone: phone || '',
+            consigneeAddress: address || '',
+            consigneePincode: String(pincode || ''),
+            weight: Number(weight) || 500,
+            length: Number(length) || 10,
+            width: Number(width) || 10,
+            height: Number(height) || 10,
+            paymentMode: paymentMode || 'Prepaid',
+            items: JSON.stringify(items || []),
+            status: 'Manifested'
+          });
+        }
+        console.log(`[Delhivery] Successfully booked and saved Order #${orderId} (AWB: ${awb})`);
+        notifyClients();
+      } catch (dbErr) {
+        console.error('Database write error for Delhivery order:', dbErr);
       }
       
-      res.json(data);
+      res.json({
+        success: true,
+        booked: true,
+        awb,
+        orderId,
+        package: pkg,
+        upload_wbn: data.upload_wbn,
+        data
+      });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      res.status(500).json({ success: false, booked: false, error: e.message });
     }
   });
   
@@ -1727,6 +1862,9 @@ app.get('/api/delhivery/label-url/:awb', requireStaffAuth, async (req, res) => {
       if (!s || !s.delhiveryApiKey) return res.status(400).json({ error: 'Delhivery API Key not configured' });
       
       const { awb } = req.params;
+      if (awb && awb.toUpperCase().startsWith('UPL')) {
+        return res.status(400).json({ error: 'UPL is an upload transaction ID, not a valid Delhivery waybill number.' });
+      }
       
       const response = await fetch(`https://track.delhivery.com/api/p/packing_slip?wbns=${awb}&pdf=true&pdf_size=`, {
         method: 'GET',
@@ -1778,6 +1916,9 @@ app.get('/api/delhivery/label-url/:awb', requireStaffAuth, async (req, res) => {
       if (!s || !s.delhiveryApiKey) return res.status(400).send('Delhivery API Key not configured');
       
       const { awb } = req.params;
+      if (awb && awb.toUpperCase().startsWith('UPL')) {
+        return res.status(400).send('UPL is an upload transaction ID, not a valid Delhivery waybill number.');
+      }
       
       const response = await fetch(`https://track.delhivery.com/api/p/packing_slip?wbns=${awb}&pdf=true`, {
         method: 'GET',
@@ -1828,6 +1969,16 @@ app.get('/api/delhivery/label-url/:awb', requireStaffAuth, async (req, res) => {
       res.json(orders);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Delete an order from local courier history (e.g. unbooked, failed, or test entries)
+  app.delete('/api/delhivery/orders/:id', requireStaffAuth, async (req, res) => {
+    try {
+      await db.delete(delhiveryOrders).where(eq(delhiveryOrders.id, req.params.id));
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: 'Failed to delete order', details: e.message });
     }
   });
 
